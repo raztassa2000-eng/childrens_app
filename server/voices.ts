@@ -217,10 +217,13 @@ export function createCloudRenderer(options: { apiKey: string; fetch?: typeof fe
   const doFetch = options.fetch ?? fetch;
   const interval = 60_000 / Math.max(1, options.requestsPerMinute ?? 150);
   let nextSlot = 0;
+  let authError: string | null = null;
   return {
     engine: "cloud-chirp3",
     async synthesize({ text, voice, language }) {
       const locale = CLOUD_LOCALES[language] ?? "en-US";
+      // A rejected key won't start working mid-run: stop asking after the first refusal.
+      if (authError) throw new GeminiError(authError, 401);
       for (let attempt = 0; ; attempt++) {
         const now = Date.now();
         const at = Math.max(now, nextSlot);
@@ -244,8 +247,13 @@ export function createCloudRenderer(options: { apiKey: string; fetch?: typeof fe
           for (let i = 0; i < pcm.length; i++) pcm[i] = bytes.readInt16LE(dataAt + i * 2);
           return { pcm, sampleRate: bytes.indexOf("data") >= 0 ? bytes.readUInt32LE(24) : 24000 };
         }
+        const message = body.error?.message ?? `Text-to-Speech failed (${res.status})`;
+        if (res.status === 401 || res.status === 403 || /API keys? (are|is) not supported|API key not valid/i.test(message)) {
+          authError = `${message} (Use a standard "AIza..." API key from console.cloud.google.com in GOOGLE_TTS_API_KEY.)`;
+          throw new GeminiError(authError, res.status);
+        }
         const retryable = res.status === 429 || res.status >= 500;
-        if (!retryable || attempt >= 5) throw new GeminiError(body.error?.message ?? `Text-to-Speech failed (${res.status})`, res.status);
+        if (!retryable || attempt >= 5) throw new GeminiError(message, res.status);
         await sleep(2000 * 2 ** attempt);
       }
     },
@@ -255,10 +263,12 @@ export function createCloudRenderer(options: { apiKey: string; fetch?: typeof fe
 /** Picks the voice engine from the environment (VOICE_ENGINE=cloud or gemini). */
 export function rendererFromEnv(env: NodeJS.ProcessEnv): { renderer: VoiceRenderer; label: string } | null {
   const key = env.GEMINI_API_KEY || env.GOOGLE_API_KEY;
-  if (!key) return null;
   if (env.VOICE_ENGINE === "cloud") {
-    return { renderer: createCloudRenderer({ apiKey: key, requestsPerMinute: Number(env.GOOGLE_TTS_RPM ?? 150) }), label: "Google Cloud Chirp 3 HD" };
+    const cloudKey = env.GOOGLE_TTS_API_KEY || key;
+    if (!cloudKey) return null;
+    return { renderer: createCloudRenderer({ apiKey: cloudKey, requestsPerMinute: Number(env.GOOGLE_TTS_RPM ?? 150) }), label: "Google Cloud Chirp 3 HD" };
   }
+  if (!key) return null;
   const model = env.GEMINI_TTS_MODEL || DEFAULT_TTS_MODEL;
   return {
     renderer: createGeminiRenderer({ apiKey: key, model, requestsPerMinute: Number(env.GEMINI_TTS_RPM ?? 10) }),

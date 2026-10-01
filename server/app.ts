@@ -3,11 +3,12 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { z } from "zod";
 import { AGE_PROFILES, CATEGORY_BY_ID, LANGUAGE_NAMES } from "../shared/categories";
 import { normalizeEpisode, normalizeSeries, slugify } from "../shared/normalize";
-import { AGE_GROUPS } from "../shared/types";
+import { AGE_GROUPS, type Series } from "../shared/types";
 import { FriendlyError, MODEL, type Writer } from "./ai";
 import { JobQueue, type JobUpdate } from "./jobs";
 import type { Library } from "./library";
 import { cleanIdea, episodePrompt, reviewPrompt, seriesPrompt } from "./prompts";
+import { episodeLines, type VoiceStudio } from "./voices";
 
 export interface AppOptions {
   library: Library;
@@ -15,6 +16,8 @@ export interface AppOptions {
   writer: Writer | null;
   safetyReview: boolean;
   generationsPerHour: number;
+  /** null when no Gemini API key is configured: the app falls back to the device's voices. */
+  voices?: VoiceStudio | null;
   episodesPerSeries?: number;
   maxEpisodes?: number;
 }
@@ -28,6 +31,8 @@ const SeriesRequest = z.object({
 });
 
 const EpisodeRequest = z.object({ idea: z.string().max(200).optional() });
+
+const VoicesRequest = z.object({ seriesId: z.string().max(120), episode: z.number().int().min(1).max(100) });
 
 /** Simple per-client sliding-window limit so nobody can run up the AI bill. */
 function rateLimiter(limit: number, windowMs = 60 * 60 * 1000) {
@@ -54,6 +59,7 @@ function writingMessage(fraction: number, kind: "series" | "episode") {
 
 export function createApp(options: AppOptions) {
   const { library, writer, safetyReview } = options;
+  const voices = options.voices ?? null;
   const episodesPerSeries = options.episodesPerSeries ?? 3;
   const maxEpisodes = options.maxEpisodes ?? 24;
   const jobs = new JobQueue();
@@ -78,8 +84,53 @@ export function createApp(options: AppOptions) {
   });
 
   app.get("/api/health", (_req, res) => {
-    res.json({ ok: true, ai: writer !== null, model: writer ? MODEL : null, safetyReview });
+    res.json({ ok: true, ai: writer !== null, voices: voices !== null, model: writer ? MODEL : null, safetyReview });
   });
+
+  // Natural voices: the app asks for an episode's voice pack and polls until every line is ready.
+  app.post("/api/voices", async (req, res, next) => {
+    try {
+      const parsed = VoicesRequest.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid request." });
+        return;
+      }
+      if (!voices) {
+        res.status(503).json({ error: "Natural voices need a Gemini API key on the server." });
+        return;
+      }
+      const series = library.get(parsed.data.seriesId);
+      const episode = series?.episodes.find((e) => e.number === parsed.data.episode);
+      if (!series || !episode) {
+        res.status(404).json({ error: "Episode not found." });
+        return;
+      }
+      const status = await voices.pack(episodeLines(series, episode));
+      const lines = Object.fromEntries(
+        Object.entries(status.lines).map(([key, clip]) => [key, { ...clip, url: `/api/audio/${clip.file}` }]),
+      );
+      res.json({ ...status, lines });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/audio/:file", (req, res) => {
+    if (!voices || !/^[a-f0-9]{40}\.wav$/.test(req.params.file)) {
+      res.status(404).end();
+      return;
+    }
+    // Files are named by a hash of their content, so they never change.
+    res.sendFile(req.params.file, { root: voices.dir, maxAge: "365d", immutable: true }, (error) => {
+      if (error && !res.headersSent) res.status(404).end();
+    });
+  });
+
+  /** New studio episodes get their voices straight away, so they're ready when the kid presses play. */
+  const prevoice = (series: Series, number: number) => {
+    const episode = series.episodes.find((e) => e.number === number);
+    if (voices && episode) void voices.renderAll(episodeLines(series, episode));
+  };
 
   app.get("/api/catalog", (_req, res) => {
     res.json({ series: library.list() });
@@ -157,6 +208,7 @@ export function createApp(options: AppOptions) {
       const series = normalizeSeries(raw, { id, category: category.id, age, language, fallbackEmoji: category.emoji });
       await review(w, update, reviewPrompt(series));
       await library.save(series);
+      prevoice(series, 1);
       return { seriesId: series.id, episode: 1 };
     });
     res.status(202).json({ job });
@@ -198,6 +250,7 @@ export function createApp(options: AppOptions) {
           const updated = { ...current, episodes: [...current.episodes, episode] };
           await review(w, update, reviewPrompt(updated, [episode.number]));
           await library.save(updated);
+          prevoice(updated, episode.number);
           return { seriesId: updated.id, episode: episode.number };
         } finally {
           busySeries.delete(series.id);

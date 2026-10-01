@@ -58,11 +58,21 @@ export function speechSeconds(text: string, rate = 1): number {
   return Math.max(1.1, words / (2.6 * rate) + 0.3);
 }
 
-export function buildTimeline(series: Pick<Series, "title">, episode: Episode, rate = 1): Timeline {
+/**
+ * `voiced` holds the real length (at normal speed) of lines that have recorded
+ * voices; other lines use an estimate.
+ */
+export function buildTimeline(
+  series: Pick<Series, "title">,
+  episode: Episode,
+  rate = 1,
+  voiced: Record<string, number> = {},
+): Timeline {
   const lines: TimedLine[] = [];
+  const say = (key: string, text: string) => (key in voiced ? voiced[key] / rate : speechSeconds(text, rate));
 
   const introText = `${withMark(series.title, "!")} ${withMark(episode.title, ".")}`;
-  const introLineEnd = 0.8 + speechSeconds(introText, rate);
+  const introLineEnd = 0.8 + say("intro", introText);
   lines.push({ key: "intro", segment: "intro", sceneIndex: -1, speaker: NARRATOR, text: introText, start: 0.8, end: introLineEnd });
   const introEnd = Math.max(INTRO_SECONDS, introLineEnd + 0.8);
 
@@ -71,7 +81,7 @@ export function buildTimeline(series: Pick<Series, "title">, episode: Episode, r
     const start = t;
     let cursor = start + SCENE_LEAD;
     scene.lines.forEach((line, lineIndex) => {
-      const end = cursor + speechSeconds(line.text, rate);
+      const end = cursor + say(`${index}.${lineIndex}`, line.text);
       lines.push({ key: `${index}.${lineIndex}`, segment: "scene", sceneIndex: index, speaker: line.speaker, text: line.text, start: cursor, end });
       cursor = end + LINE_GAP;
     });
@@ -84,7 +94,7 @@ export function buildTimeline(series: Pick<Series, "title">, episode: Episode, r
   let duration = outroStart + MIN_OUTRO;
   if (episode.takeaway) {
     const start = outroStart + 1;
-    const end = start + speechSeconds(episode.takeaway, rate);
+    const end = start + say("outro", episode.takeaway);
     lines.push({ key: "outro", segment: "outro", sceneIndex: -2, speaker: NARRATOR, text: episode.takeaway, start, end });
     duration = Math.max(duration, end + OUTRO_TAIL);
   }

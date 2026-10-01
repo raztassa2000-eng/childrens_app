@@ -2,7 +2,7 @@
 
 **Animated mini-series for kids, written by AI.** Every world (animals, math, physics, kindness, feelings, space, nature, the body, world cultures, letters, inventions, art & music, coding and safety) has cartoon shows with recurring characters, narration and character voices, a theme song, subtitles and a short quiz after each episode. Parents can generate brand-new shows or new episodes on any topic, in 12 languages, with Claude.
 
-It runs as an **iPhone app** (Capacitor + Xcode) and on the web.
+It runs as an **iPhone app** (Capacitor + Xcode) and on the web. The app speaks **Hebrew by default** (right-to-left), with **English** and **French** a tap away in the parent zone. Every built-in show exists in all three languages.
 
 <p>
   <img src="docs/home.png" width="240" alt="Home screen with today's pick and worlds" />
@@ -17,9 +17,10 @@ Claude writes each episode as a structured **script**: scenes, backgrounds, whic
 
 - **20 painted, animated sets**: jungle with swaying vines, underwater with rising bubbles, space with a shooting star, a city with a working traffic light, a lab with bubbling flasks, a theater stage with spotlights, and more.
 - **Characters are emoji puppets** with 16 performances, entrances, name tags, speech bubbles and squash-and-stretch.
-- **A timeline clock** drives camera moves, iris transitions, captions and narration. If a voice runs long, the clock waits for it while the characters keep moving, so words and pictures never drift apart. You can play, pause, skip scenes and scrub.
-- **Every character has a voice.** On iPhone these are the native iOS voices; on the web, the browser's. The narrator, kids, deep-voiced elephants and robots all sound different.
-- **Each series gets its own theme song**, generated live with Web Audio. It ducks under the narration.
+- **Living sets:** butterflies, birds, ducks, crabs, fish, taxis, fireflies and shooting stars wander through the background; leaves, raindrops and snowflakes fall; characters land in a puff of dust.
+- **A timeline clock** drives camera moves (including close-ups on whoever is talking), iris, star and stripe transitions, captions and narration. If a voice runs long, the clock waits for it while the characters keep moving, so words and pictures never drift apart. You can play, pause, skip scenes and scrub.
+- **Natural AI voices.** With a Google Gemini key on the server, every line is performed by Gemini text-to-speech: a warm storyteller narrator, and a distinct voice and acting style per character (giggly, gentle, booming, wise, robot). Mouths move with the loudness of the words, and the episode re-times itself to the real recordings. Clips are rendered once and cached in `data/audio/`. Without a key, the device's own voices are used.
+- **Each series gets its own theme song**, generated live with Web Audio (warm chords, an echoing melody, bass and drums). It ducks under the narration.
 - **Subtitles adapt to the screen.** On a phone held upright, lines appear as large subtitles under the video. In landscape the video fills the screen and lines appear as speech bubbles inside it.
 
 ### Episode length
@@ -28,7 +29,7 @@ Episodes are bite-sized and grow with the child: **about 1–2 minutes for ages 
 
 ## What's in the box
 
-- **14 built-in mini-series (42 episodes)**, one per world. They work offline, with no AI key needed.
+- **14 built-in mini-series (42 episodes), in Hebrew, English and French** (126 episodes in all), one per world. The rhymes and alphabet show is written separately in each language (ארנב/זנב, א־ב־ג; chat/plat, A comme ananas). They work offline, with no AI key needed.
 - **Magic Studio:** make a new 3-episode series about any topic or idea, or the next episode of any show (in English, Spanish, French, German, Hebrew, Arabic, Portuguese, Italian, Russian, Chinese, Hindi or Japanese).
 - **Bulk generation** (`npm run seed`) to fill the library with many shows at half price using the Batches API.
 - **Kid-safe by design:** strict writing rules, a second AI safety review of every script before it's published (it fails closed), blocked emoji, sanitized text, rate limits, and a parent gate.
@@ -42,12 +43,19 @@ npm install
 npm run dev          # API on :8787 + app on http://localhost:5173
 ```
 
-Without an API key everything works except the Magic Studio. To turn it on:
+Without API keys everything works except the Magic Studio, and the voices are the device's. To turn on the AI:
 
 ```bash
-cp .env.example .env               # then add your key
-export ANTHROPIC_API_KEY=sk-ant-...
+cp .env.example .env    # then fill in:
+                        #   ANTHROPIC_API_KEY  Magic Studio (Claude writes new shows)
+                        #   GEMINI_API_KEY     natural voices (https://aistudio.google.com/apikey)
 npm run dev
+```
+
+To have every built-in episode voiced before anyone presses play (otherwise voices are made the first time each episode is watched):
+
+```bash
+npm run voices -- --language he       # or leave out --language for all three
 ```
 
 ## iPhone app
@@ -77,6 +85,9 @@ The iOS build plays sound even with the silent switch on (like other video apps)
 | `CLAUDE_EFFORT` | `medium` | Thinking effort for writing (`low`…`max`). Reviews use `low` |
 | `SAFETY_REVIEW` | `on` | Second-pass child-safety review of every script |
 | `GENERATION_LIMIT_PER_HOUR` | `20` | Per-client limit on new shows/episodes |
+| `GEMINI_API_KEY` | | Turns on natural voices (`GOOGLE_API_KEY` also works) |
+| `GEMINI_TTS_MODEL` | `gemini-3.8-flash-tts` | Gemini text-to-speech model. Falls back to `gemini-2.5-flash-preview-tts` if your key can't use it |
+| `AUDIO_DIR` | `data/audio` | Where rendered voice clips are cached |
 
 - Scripts come back as **structured JSON** (`output_config.format`), validated with Zod and then repaired by `shared/normalize.ts`. That step clamps lengths, resolves character names, drops unknown or blocked emoji, and fixes quiz answers, so a slightly-off answer is repaired instead of failing.
 - Live requests use **server-side refusal fallbacks** (`fallbacks: "default"`), so a request a safety classifier declines is retried on Anthropic's recommended fallback model instead of failing.
@@ -105,8 +116,9 @@ Shows made in the Studio are saved to `data/series/` (set `DATA_DIR` to change i
 ```
 shared/        Episode-script types, Zod schemas, normalizer, timeline, categories
 shared/builtin Built-in series, written in a small type-checked DSL
-server/        Express API: catalog, Magic Studio jobs, Claude writer + safety reviewer
-scripts/       seed.ts: bulk generation with the Batches API
+server/        Express API: catalog, Magic Studio jobs, Claude writer + safety reviewer, Gemini voices
+shared/builtin/he, fr  Hebrew and French versions of the built-in shows
+scripts/       seed.ts: bulk generation with the Batches API; voices.ts: pre-render voices
 src/engine/    Canvas animation engine: backgrounds, motion, renderer, player, voices, music
 src/           React app: pages, player UI, quiz, parent zone
 ios/           Native iOS project (Capacitor)
@@ -116,6 +128,6 @@ tests/         Content validation, normalizer/timeline, API tests with a fake AI
 ## Tests
 
 ```bash
-npm test            # 95 tests: every built-in script, the normalizer, the timeline, the API
+npm test            # 243 tests: every built-in script in every language, the normalizer, the timeline, the API, the voices
 npm run typecheck
 ```

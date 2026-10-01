@@ -4,7 +4,9 @@ import { MusicBox } from "./music";
 import { W, hash } from "./paint";
 import { renderFrame } from "./render";
 import { sfx } from "./sfx";
+import { audioContext } from "./audio";
 import { getSpeech } from "./speech";
+import { loudness, type VoiceClip, type VoicePack } from "./voicePack";
 
 export interface PlayerSettings {
   narration: boolean;
@@ -22,7 +24,7 @@ export type PlayerStatus = "paused" | "playing" | "ended";
  * line runs long so words and pictures never drift apart.
  */
 export class EpisodePlayer {
-  readonly timeline: Timeline;
+  timeline: Timeline;
   t = 0;
   status: PlayerStatus = "paused";
   onEnded: (() => void) | null = null;
@@ -40,6 +42,11 @@ export class EpisodePlayer {
   textMode: "canvas" | "outside" = "canvas";
   private spoken = new Set<string>();
   private speaking: { line: TimedLine; done: boolean; token: number } | null = null;
+  /** The natural-voice clip playing right now, for lip-sync. */
+  private clip: { clip: VoiceClip; source: AudioBufferSourceNode; startedAt: number } | null = null;
+  private unsubscribeVoices: (() => void) | null = null;
+  /** True while the story pauses for a natural voice that's still being made. */
+  waitingForVoice = false;
   private token = 0;
   private holdStarted = -1;
   private lastScene = -1;
@@ -52,11 +59,51 @@ export class EpisodePlayer {
     private readonly episode: Episode,
     private readonly colors: [string, string],
     private settings: PlayerSettings,
+    private readonly voices: VoicePack | null = null,
   ) {
-    this.timeline = buildTimeline(series, episode, settings.rate);
+    this.timeline = buildTimeline(series, episode, settings.rate, voices?.durations());
+    this.unsubscribeVoices = voices?.subscribe(() => this.retime()) ?? null;
     this.ctx = canvas.getContext("2d")!;
     this.music = new MusicBox(hash(series.id));
     this.resize();
+  }
+
+  /**
+   * Re-times the episode to the real voice lengths as they arrive, keeping the
+   * playhead at the same moment of the story.
+   */
+  private retime() {
+    if (this.destroyed || !this.voices) return;
+    const old = this.timeline;
+    const next = buildTimeline(this.series, this.episode, this.settings.rate, this.voices.durations());
+    const anchors = (tl: Timeline) => [
+      0,
+      tl.introEnd,
+      ...tl.lines.flatMap((l) => [l.start, l.end]),
+      ...tl.scenes.flatMap((s) => [s.start, s.end]),
+      tl.outroStart,
+      tl.duration,
+    ];
+    const from = anchors(old);
+    const to = anchors(next);
+    const order = from.map((_, i) => i).sort((a, b) => from[a] - from[b] || to[a] - to[b]);
+    let mapped = (this.t / old.duration) * next.duration;
+    for (let k = 0; k < order.length - 1; k++) {
+      const a = order[k];
+      const b = order[k + 1];
+      if (this.t >= from[a] && this.t <= from[b]) {
+        const span = from[b] - from[a];
+        mapped = span > 0 ? to[a] + ((this.t - from[a]) / span) * (to[b] - to[a]) : to[b];
+        break;
+      }
+    }
+    this.timeline = next;
+    this.t = Math.min(Math.max(0, mapped), next.duration - 0.05);
+    if (this.speaking) {
+      const line = next.lines.find((l) => l.key === this.speaking!.line.key);
+      if (line) this.speaking.line = line;
+    }
+    this.emit();
   }
 
   get duration() {
@@ -156,7 +203,16 @@ export class EpisodePlayer {
     this.raf = 0;
     this.stopSpeech(false);
     this.music.stop();
+    this.unsubscribeVoices?.();
     this.listeners.clear();
+  }
+
+  /** How loud the current natural-voice clip is right now (null with device voices). */
+  private talkLevel(): number | null {
+    const playing = this.clip;
+    const ctx = playing && audioContext();
+    if (!playing || !ctx) return null;
+    return loudness(playing.clip, Math.max(0, (ctx.currentTime - playing.startedAt) * this.settings.rate));
   }
 
   activeLine(): TimedLine | null {
@@ -179,6 +235,7 @@ export class EpisodePlayer {
       pixelRatio: this.pixelRatio,
       textScale: this.textScale,
       textMode: this.textMode,
+      talkLevel: this.talkLevel(),
     });
   }
 
@@ -202,7 +259,7 @@ export class EpisodePlayer {
     if (speaking && !speaking.done && next >= speaking.line.end) {
       // The voice is still talking: hold the timeline while characters keep moving.
       if (this.holdStarted < 0) this.holdStarted = this.wall;
-      if (this.wall - this.holdStarted < 8) next = Math.max(this.t, speaking.line.end - 0.001);
+      if (this.wall - this.holdStarted < 12) next = Math.max(this.t, speaking.line.end - 0.001);
     } else {
       this.holdStarted = -1;
     }
@@ -224,28 +281,65 @@ export class EpisodePlayer {
 
   private say(line: TimedLine) {
     const token = ++this.token;
-    const speech = getSpeech();
     this.speaking = { line, done: false, token };
-    if (!this.settings.narration || !speech.supported) {
+    const device = getSpeech();
+    const voices = this.voices?.available ? this.voices : null;
+    if (!this.settings.narration || (!device.supported && !voices)) {
       this.speaking.done = true;
       return;
     }
+    const current = () => this.speaking?.token === token;
+    const finish = () => {
+      if (!current()) return;
+      this.speaking!.done = true;
+      this.clip = null;
+      this.music.duck(false);
+    };
+    this.music.duck(true);
+    void (async () => {
+      // Natural voice if there is (or soon will be) one; the timeline holds while we wait.
+      let clip = voices?.get(line.key);
+      if (!clip && voices?.expecting(line.key)) {
+        this.waitingForVoice = true;
+        this.emit();
+        clip = await voices.waitFor(line.key, 10000);
+        this.waitingForVoice = false;
+        this.emit();
+      }
+      if (!current()) return;
+      if (clip && this.playClip(clip, finish)) return;
+      await this.deviceSay(line);
+      finish();
+    })();
+  }
+
+  private playClip(clip: VoiceClip, onDone: () => void): boolean {
+    const ctx = audioContext();
+    if (!ctx) return false;
+    const source = ctx.createBufferSource();
+    source.buffer = clip.buffer;
+    source.playbackRate.value = this.settings.rate;
+    source.connect(ctx.destination);
+    source.onended = () => {
+      if (this.clip?.source === source) onDone();
+    };
+    this.clip = { clip, source, startedAt: ctx.currentTime };
+    source.start();
+    return true;
+  }
+
+  private deviceSay(line: TimedLine): Promise<void> {
+    const speech = getSpeech();
+    if (!speech.supported) return Promise.resolve();
     const index = this.series.cast.findIndex((c) => c.id === line.speaker);
     const member = index >= 0 ? this.series.cast[index] : undefined;
     const isExtra = !member && line.speaker !== "narrator";
-    this.music.duck(true);
-    void speech
-      .speak(line.text, {
-        lang: this.series.language,
-        style: member?.voice ?? (isExtra ? "child" : "narrator"),
-        rate: this.settings.rate,
-        slot: member ? index + 1 : isExtra ? 4 : 0,
-      })
-      .then(() => {
-        if (this.speaking?.token !== token) return;
-        this.speaking.done = true;
-        this.music.duck(false);
-      });
+    return speech.speak(line.text, {
+      lang: this.series.language,
+      style: member?.voice ?? (isExtra ? "child" : "narrator"),
+      rate: this.settings.rate,
+      slot: member ? index + 1 : isExtra ? 4 : 0,
+    });
   }
 
   private stopSpeech(rewind: boolean) {
@@ -253,6 +347,14 @@ export class EpisodePlayer {
     this.token++;
     this.speaking = null;
     this.holdStarted = -1;
+    this.waitingForVoice = false;
+    const clip = this.clip;
+    this.clip = null;
+    try {
+      clip?.source.stop();
+    } catch {
+      // Already finished.
+    }
     getSpeech().cancel();
     this.music.duck(false);
     if (rewind && speaking && !speaking.done && this.t >= speaking.line.start) {

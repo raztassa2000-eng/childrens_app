@@ -1,5 +1,6 @@
 import { NARRATOR, type CastMember, type Episode, type Prop, type Scene, type Series } from "../../shared/types";
 import { sceneAt, type TimedLine, type Timeline } from "../../shared/timeline";
+import { FALLING, fallingPath, paintAmbient } from "./ambient";
 import { BACKGROUND_INFO, paintBackground } from "./backgrounds";
 import { actionPose, clamp01, easeInOut, easeOutBack, easeOutBounce, easeOutCubic, type Pose } from "./motion";
 import { H, W, hash, rng, roundRect } from "./paint";
@@ -15,6 +16,8 @@ export interface FrameInput {
   /** Free-running clock in seconds (drives looping motion, keeps moving while narration holds). */
   wall: number;
   activeLine: TimedLine | null;
+  /** Loudness (0-1) of the natural voice speaking now, so mouths move with the words. */
+  talkLevel?: number | null;
   showText: boolean;
   colors: [string, string];
   pixelRatio: number;
@@ -217,18 +220,20 @@ function drawIntro(ctx: CanvasRenderingContext2D, f: FrameInput) {
     ctx.fillStyle = "rgba(255,255,255,0.95)";
     roundRect(ctx, x0, y - bh / 2, total, bh, bh / 2);
     ctx.fill();
+    // The number sits at the start of the reading direction.
+    const rtl = ctx.direction === "rtl";
+    const numX = rtl ? x0 + total - 40 : x0 + 40;
     ctx.beginPath();
-    ctx.arc(x0 + 40, y, 26, 0, Math.PI * 2);
+    ctx.arc(numX, y, 26, 0, Math.PI * 2);
     ctx.fillStyle = f.colors[1];
     ctx.fill();
     ctx.fillStyle = "#ffffff";
     ctx.font = font(30, 700);
-    ctx.fillText(String(f.episode.number), x0 + 40, y + 1);
+    ctx.fillText(String(f.episode.number), numX, y + 1);
     ctx.fillStyle = "#2d2150";
     ctx.font = font(badgeSize, 600);
-    ctx.textAlign = "left";
-    ctx.direction = "ltr";
-    ctx.fillText(label, x0 + 84, y + 1, 1000);
+    ctx.textAlign = rtl ? "right" : "left";
+    ctx.fillText(label, rtl ? x0 + total - 84 : x0 + 84, y + 1, 1000);
     ctx.restore();
   }
 
@@ -338,6 +343,25 @@ function cameraFor(index: number, progress: number): Camera {
   return cam;
 }
 
+/**
+ * Gently pushes in on whoever is talking, like a cartoon cutting to a
+ * close-up, and eases back out between lines.
+ */
+function focusOnSpeaker(cam: Camera, f: FrameInput, index: number, actors: PlacedActor[]) {
+  const line = f.activeLine;
+  if (!line || line.segment !== "scene" || line.sceneIndex !== index || line.speaker === NARRATOR) return;
+  const speaker = actors.find((a) => a.who === line.speaker && a.scale > 0.5);
+  if (!speaker || actors.length < 2) return;
+  const into = easeInOut(clamp01((f.t - line.start) / 0.7));
+  const out = easeInOut(clamp01((line.end + 0.3 - f.t) / 0.6));
+  const w = Math.min(into, out);
+  if (w <= 0) return;
+  cam.zoom += 0.1 * w;
+  cam.panX += -(speaker.x - W / 2) * cam.zoom * 0.28 * w;
+  // Never show past the painted edges of the set.
+  cam.panX = Math.min(cam.fx * (cam.zoom - 1), Math.max(-(W - cam.fx) * (cam.zoom - 1), cam.panX));
+}
+
 function toScreen(cam: Camera, x: number, y: number) {
   return { x: (x - cam.fx) * cam.zoom + cam.fx + cam.panX, y: (y - cam.fy) * cam.zoom + cam.fy };
 }
@@ -353,6 +377,8 @@ interface PlacedActor {
   scale: number;
   speaking: boolean;
   firstAppearance: boolean;
+  /** Seconds since the actor landed on stage (for a dust puff), or null. */
+  landed: number | null;
 }
 
 function propSlots(place: Prop["place"], groundY: number): Array<[number, number, number]> {
@@ -399,6 +425,19 @@ function drawProps(
     const carried = prev?.background === scene.background && prev.props.some((p) => p.emoji === prop.emoji && p.place === prop.place);
     const appear = carried ? 1 : easeOutBack(clamp01((lt - 0.25 - i * 0.12) / 0.5));
     if (appear <= 0) return;
+    if (prop.place === "air" && FALLING.has(prop.emoji)) {
+      // Leaves swirl down, drops fall, bubbles rise: three at once for a little shower.
+      for (let k = 0; k < 3; k++) {
+        const path = fallingPath(prop.emoji, slot[0] + (k - 1) * 90, f.wall, i * 3 + k, groundY - 10);
+        ctx.save();
+        ctx.globalAlpha = path.alpha * clamp01(appear);
+        ctx.translate(path.x, path.y);
+        ctx.rotate(path.rot);
+        drawEmoji(ctx, prop.emoji, 0, 0, slot[2] * (k === 1 ? 1 : 0.75), f.pixelRatio);
+        ctx.restore();
+      }
+      return;
+    }
     const bob = prop.place === "ground" ? 0 : Math.sin(f.wall * (prop.place === "air" ? 2 : 1.1) + i) * (prop.place === "air" ? 12 : 6);
     ctx.save();
     ctx.translate(slot[0], slot[1] + bob);
@@ -427,6 +466,7 @@ function placeActors(f: FrameInput, index: number, lt: number): PlacedActor[] {
     let x = slots[i];
     let y = info.groundY;
     let scale = 1;
+    let landed: number | null = null;
 
     const prevIndex = prev ? prev.actors.findIndex((a) => a.who === actor.who) : -1;
     const continuing = prevIndex >= 0 && prev!.background === scene.background;
@@ -440,31 +480,55 @@ function placeActors(f: FrameInput, index: number, lt: number): PlacedActor[] {
       x = from + (x - from) * easeOutCubic(clamp01(lt / 0.7));
     } else if (entrance === "pop") {
       scale = easeOutBack(clamp01((lt - delay) / 0.5));
+      landed = lt - delay - 0.2;
     } else if (entrance === "left") {
       x = -160 + (x + 160) * easeOutCubic(p);
       if (p < 1) pose.flip = true;
+      landed = lt - delay - 0.55;
     } else if (entrance === "right") {
       x = W + 160 - (W + 160 - x) * easeOutCubic(p);
       if (p < 1) pose.flip = false;
+      landed = lt - delay - 0.55;
     } else if (entrance === "top") {
       y = -220 + (y + 220) * easeOutBounce(p);
+      landed = lt - delay - 0.85 * 0.36;
     }
 
     const speaking = speakingWho === actor.who;
     if (speaking) {
-      const talk = Math.abs(Math.sin(f.wall * 13));
+      const wobble = Math.abs(Math.sin(f.wall * 13));
+      const talk = f.talkLevel == null ? wobble : Math.min(1, f.talkLevel * (0.65 + 0.35 * wobble) * 1.15);
       pose.sy *= 1 + 0.07 * talk;
       pose.dy -= talk * 5;
     }
 
     const firstIndex = f.episode.scenes.findIndex((s) => s.actors.some((a) => a.who === actor.who));
-    return { who: actor.who, emoji, member, x, y, size: member ? size : size * 0.85, pose, scale, speaking, firstAppearance: firstIndex === index };
+    return { who: actor.who, emoji, member, x, y, size: member ? size : size * 0.85, pose, scale, speaking, firstAppearance: firstIndex === index, landed };
   });
+}
+
+/** A little cartoon cloud of dust where someone lands. */
+function dustPuff(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, age: number) {
+  const p = age / 0.6;
+  if (p < 0 || p > 1) return;
+  ctx.save();
+  ctx.globalAlpha = (1 - p) * 0.75;
+  ctx.fillStyle = "#ffffff";
+  for (let i = 0; i < 6; i++) {
+    const side = i % 2 ? 1 : -1;
+    const spread = (0.25 + 0.5 * easeOutCubic(p)) * size * (0.6 + (i >> 1) * 0.25);
+    const r = size * (0.09 - (i >> 1) * 0.015) * (1 + p * 0.6);
+    ctx.beginPath();
+    ctx.arc(x + side * spread, y - r * 0.6 - p * 14 * ((i >> 1) + 1), r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawActor(ctx: CanvasRenderingContext2D, a: PlacedActor, f: FrameInput, floaty: boolean) {
   const { pose } = a;
   const x = a.x + pose.dx;
+  if (!floaty && a.landed !== null) dustPuff(ctx, x, a.y + 6, a.size, a.landed);
   if (!floaty && a.scale > 0) {
     const shrink = 1 - Math.min(pose.lift, 220) / 320;
     ctx.fillStyle = "rgba(30,20,60,0.18)";
@@ -556,6 +620,17 @@ function caption(ctx: CanvasRenderingContext2D, text: string, f: FrameInput, lt:
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   outlinedText(ctx, text, 0, 3, "#ffffff", "rgba(40,20,70,0.45)", 9);
+  // A burst of sparkles as the caption pops in.
+  const burst = (lt - 0.5) / 0.9;
+  if (burst > 0 && burst < 1) {
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + 0.3;
+      const d = easeOutCubic(burst);
+      ctx.globalAlpha = 1 - burst;
+      drawEmoji(ctx, "✨", Math.cos(a) * (w / 2 + 30 * d), Math.sin(a) * (h / 2 + 40 * d), 30, f.pixelRatio);
+    }
+    ctx.globalAlpha = 1;
+  }
   ctx.restore();
 }
 
@@ -641,14 +716,16 @@ function drawScene(ctx: CanvasRenderingContext2D, f: FrameInput, index: number) 
   const lt = f.t - timed.start;
   const info = BACKGROUND_INFO[scene.background];
   const cam = cameraFor(index, lt / (timed.end - timed.start));
+  const actors = placeActors(f, index, lt);
+  focusOnSpeaker(cam, f, index, actors);
 
   ctx.save();
   ctx.translate(cam.fx + cam.panX, cam.fy);
   ctx.scale(cam.zoom, cam.zoom);
   ctx.translate(-cam.fx, -cam.fy);
   paintBackground(ctx, scene.background, f.wall);
+  paintAmbient(ctx, scene.background, f.wall, info.floaty ? 690 : info.groundY, f.pixelRatio, hash(`${f.episode.title}${index}`));
   drawProps(ctx, scene, prev, f, lt, ["sky", "ground"]);
-  const actors = placeActors(f, index, lt);
   for (const actor of actors) drawActor(ctx, actor, f, info.floaty);
   drawProps(ctx, scene, prev, f, lt, ["air"]);
   ctx.restore();
@@ -685,7 +762,60 @@ function drawScene(ctx: CanvasRenderingContext2D, f: FrameInput, index: number) 
   }
 
   if (index === 0) iris(ctx, lt / 0.6);
-  else if (prev && prev.background !== scene.background) iris(ctx, lt / 0.6);
+  else if (prev && prev.background !== scene.background) transition(ctx, index, lt / 0.6, f.colors);
+}
+
+/** Scene changes take turns between a few cartoon transitions. */
+function transition(ctx: CanvasRenderingContext2D, index: number, progress: number, colors: [string, string]) {
+  if (progress >= 1) return;
+  switch (index % 3) {
+    case 0:
+      iris(ctx, progress);
+      break;
+    case 1:
+      starIris(ctx, progress);
+      break;
+    default:
+      stripes(ctx, progress, colors);
+  }
+}
+
+function starIris(ctx: CanvasRenderingContext2D, progress: number) {
+  const r = easeInOut(clamp01(progress)) * 1500;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, W, H);
+  for (let i = 0; i <= 10; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 5 + progress * 0.8;
+    const rr = i % 2 ? r * 0.5 : r;
+    const x = W / 2 + Math.cos(a) * rr;
+    const y = H / 2 + Math.sin(a) * rr;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = "#2a1d4f";
+  ctx.fill("evenodd");
+  ctx.restore();
+}
+
+/** Diagonal candy stripes that slide away to reveal the new scene. */
+function stripes(ctx: CanvasRenderingContext2D, progress: number, colors: [string, string]) {
+  const e = easeInOut(clamp01(progress));
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.rotate(-0.35);
+  const n = 8;
+  const bandH = 1700 / n;
+  for (let i = 0; i < n; i++) {
+    const y = -850 + i * bandH;
+    const dir = i % 2 ? 1 : -1;
+    const delay = i * 0.04;
+    const p = clamp01((e - delay) / (1 - delay * 2 + 0.0001));
+    ctx.fillStyle = i % 2 ? colors[0] : colors[1];
+    ctx.fillRect(-1100 + dir * p * 2300, y, 2200, bandH + 1);
+  }
+  ctx.restore();
 }
 
 /** Draws a still, representative frame of a single scene (used for thumbnails). */

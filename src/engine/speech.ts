@@ -11,15 +11,16 @@ import { speechSeconds } from "../../shared/timeline";
 
 type Style = Voice | "narrator";
 
+// Gentle shifts only: extreme pitch is what makes device voices sound robotic.
 const STYLES: Record<Style, { pitch: number; rate: number }> = {
-  narrator: { pitch: 1.05, rate: 0.95 },
-  child: { pitch: 1.45, rate: 1.0 },
-  high: { pitch: 1.7, rate: 1.04 },
-  gentle: { pitch: 1.15, rate: 0.92 },
-  deep: { pitch: 0.6, rate: 0.9 },
-  silly: { pitch: 1.95, rate: 1.1 },
-  wise: { pitch: 0.8, rate: 0.86 },
-  robot: { pitch: 0.35, rate: 0.95 },
+  narrator: { pitch: 1.0, rate: 0.96 },
+  child: { pitch: 1.2, rate: 1.0 },
+  high: { pitch: 1.3, rate: 1.02 },
+  gentle: { pitch: 1.08, rate: 0.93 },
+  deep: { pitch: 0.82, rate: 0.92 },
+  silly: { pitch: 1.35, rate: 1.06 },
+  wise: { pitch: 0.9, rate: 0.88 },
+  robot: { pitch: 0.75, rate: 0.95 },
 };
 
 interface VoiceInfo {

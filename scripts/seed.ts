@@ -8,6 +8,7 @@
  *   npm run seed -- --categories animals,space --ages 3-5,6-8 --per 2
  *   npm run seed -- --language es --per 1 --yes
  */
+import "../server/env";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";

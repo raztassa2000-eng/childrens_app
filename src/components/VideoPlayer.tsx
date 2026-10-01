@@ -4,6 +4,8 @@ import type { Episode, Series } from "../../shared/types";
 import { EpisodePlayer, type PlayerStatus } from "../engine/player";
 import { fontsReady } from "../engine/render";
 import { setSfxEnabled } from "../engine/sfx";
+import { VoicePack } from "../engine/voicePack";
+import { useCatalog } from "../lib/catalog";
 import { haptic } from "../lib/native";
 import { useStore } from "../lib/store";
 import { useT } from "../i18n";
@@ -21,6 +23,7 @@ interface Props {
 /** A kid-sized video player for script-rendered episodes. */
 export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnded, onWatched }: Props) {
   const { settings, updateSettings } = useStore();
+  const naturalVoices = Boolean(useCatalog()?.voices);
   const t = useT();
   const shellRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -34,7 +37,8 @@ export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnde
     marks: number[];
     mode: "canvas" | "outside";
     line: TimedLine | null;
-  }>({ t: 0, status: "paused", duration: 0, marks: [], mode: "canvas", line: null });
+    waiting: boolean;
+  }>({ t: 0, status: "paused", duration: 0, marks: [], mode: "canvas", line: null, waiting: false });
   const [controlsVisible, setControlsVisible] = useState(true);
   const [theater, setTheater] = useState(false);
   const hideTimer = useRef<number | null>(null);
@@ -43,15 +47,17 @@ export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnde
 
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const player = new EpisodePlayer(canvas, series, episode, colors, {
-      narration: settings.narration,
-      music: settings.music,
-      captions: settings.captions,
-      rate: settings.rate,
-    });
+    const voices = naturalVoices ? new VoicePack(series.id, episode.number) : null;
+    const player = new EpisodePlayer(
+      canvas,
+      series,
+      episode,
+      colors,
+      { narration: settings.narration, music: settings.music, captions: settings.captions, rate: settings.rate },
+      voices,
+    );
     playerRef.current = player;
     if (import.meta.env.DEV) (window as unknown as { __player?: EpisodePlayer }).__player = player;
-    const marks = player.timeline.scenes.map((s) => s.start / player.duration);
     let lastPush = 0;
     const push = () => {
       const now = performance.now();
@@ -61,9 +67,10 @@ export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnde
         t: player.t,
         status: player.status,
         duration: player.duration,
-        marks,
+        marks: player.timeline.scenes.map((s) => s.start / player.duration),
         mode: player.textMode,
         line: player.activeLine(),
+        waiting: player.waitingForVoice,
       });
     };
     const unsubscribe = player.subscribe(push);
@@ -80,11 +87,12 @@ export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnde
       observer.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
       player.destroy();
+      voices?.stop();
       playerRef.current = null;
     };
     // The player is rebuilt only when the show itself or the speech speed changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [series, episode, colors, settings.rate]);
+  }, [series, episode, colors, settings.rate, naturalVoices]);
 
   useEffect(() => {
     playerRef.current?.update({ narration: settings.narration, music: settings.music, captions: settings.captions });
@@ -95,7 +103,7 @@ export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnde
     if (!player) return;
     if (blocked) player.pause();
     else if (autoPlay) player.play();
-  }, [autoPlay, blocked, series, episode, settings.rate]);
+  }, [autoPlay, blocked, series, episode, settings.rate, naturalVoices]);
 
   const poke = () => {
     setControlsVisible(true);
@@ -175,6 +183,7 @@ export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnde
     >
       <div className="player__stage">
         <canvas ref={canvasRef} className="player__canvas" onClick={onCanvasTap} />
+        {view.waiting && playing && <div className="player__voices">🎙️ {t.gettingVoices}</div>}
         {!playing && !blocked && (
           <button className="player__big-play" onClick={toggle} aria-label={view.status === "ended" ? t.watchAgain : t.play}>
             {view.status === "ended" ? "↻" : "▶"}

@@ -13,6 +13,7 @@
     "start": "tsx server/index.ts",
     "seed": "tsx scripts/seed.ts",
     "voices": "tsx scripts/voices.ts",
+    "batches": "tsx scripts/batches.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "ios": "npm run build && cap sync ios && cap open ios",

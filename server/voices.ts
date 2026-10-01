@@ -88,9 +88,20 @@ export interface Clip {
   env: number[];
 }
 
+export interface SpeechRequest {
+  /** The line with its acting direction (for engines that take directions). */
+  prompt: string;
+  /** Just the words. */
+  text: string;
+  voice: string;
+  language: string;
+}
+
 export interface VoiceRenderer {
+  /** Cache namespace: clips from different engines sound different, so they never mix. */
+  readonly engine: string;
   /** Returns 16-bit mono PCM samples and their sample rate. */
-  synthesize(text: string, voice: string): Promise<{ pcm: Int16Array; sampleRate: number }>;
+  synthesize(request: SpeechRequest): Promise<{ pcm: Int16Array; sampleRate: number }>;
 }
 
 class GeminiError extends Error {
@@ -162,7 +173,8 @@ export function createGeminiRenderer(options: {
   };
 
   return {
-    async synthesize(text, voice) {
+    engine: "gemini",
+    async synthesize({ prompt: text, voice }) {
       for (let attempt = 0; ; attempt++) {
         if (dailyLimitHit) throw new GeminiError("Google's daily voice limit for this key is used up. Run again tomorrow, or turn on billing in Google AI Studio.", 429);
         await pace();
@@ -191,6 +203,66 @@ export function createGeminiRenderer(options: {
         }
       }
     },
+  };
+}
+
+const CLOUD_LOCALES: Record<string, string> = { he: "he-IL", en: "en-US", fr: "fr-FR", es: "es-ES", de: "de-DE", it: "it-IT", pt: "pt-BR", ru: "ru-RU", ar: "ar-XA", hi: "hi-IN", ja: "ja-JP", zh: "cmn-CN" };
+
+/**
+ * Google Cloud Text-to-Speech "Chirp 3: HD" voices: the same 30 named voices
+ * as Gemini TTS, with far higher limits (200 requests a minute, no small daily
+ * cap). It doesn't take acting directions, so styles come from the voice choice.
+ */
+export function createCloudRenderer(options: { apiKey: string; fetch?: typeof fetch; requestsPerMinute?: number }): VoiceRenderer {
+  const doFetch = options.fetch ?? fetch;
+  const interval = 60_000 / Math.max(1, options.requestsPerMinute ?? 150);
+  let nextSlot = 0;
+  return {
+    engine: "cloud-chirp3",
+    async synthesize({ text, voice, language }) {
+      const locale = CLOUD_LOCALES[language] ?? "en-US";
+      for (let attempt = 0; ; attempt++) {
+        const now = Date.now();
+        const at = Math.max(now, nextSlot);
+        nextSlot = at + interval;
+        if (at > now) await sleep(at - now);
+        const res = await doFetch("https://texttospeech.googleapis.com/v1/text:synthesize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": options.apiKey },
+          body: JSON.stringify({
+            input: { text },
+            voice: { languageCode: locale, name: `${locale}-Chirp3-HD-${voice}` },
+            audioConfig: { audioEncoding: "LINEAR16", sampleRateHertz: 24000 },
+          }),
+        });
+        const body = (await res.json().catch(() => ({}))) as { audioContent?: string; error?: { message?: string } };
+        if (res.ok && body.audioContent) {
+          const bytes = Buffer.from(body.audioContent, "base64");
+          // LINEAR16 comes back as a WAV file: skip its header to get the samples.
+          const dataAt = bytes.indexOf("data") >= 0 ? bytes.indexOf("data") + 8 : 0;
+          const pcm = new Int16Array((bytes.length - dataAt) >> 1);
+          for (let i = 0; i < pcm.length; i++) pcm[i] = bytes.readInt16LE(dataAt + i * 2);
+          return { pcm, sampleRate: bytes.indexOf("data") >= 0 ? bytes.readUInt32LE(24) : 24000 };
+        }
+        const retryable = res.status === 429 || res.status >= 500;
+        if (!retryable || attempt >= 5) throw new GeminiError(body.error?.message ?? `Text-to-Speech failed (${res.status})`, res.status);
+        await sleep(2000 * 2 ** attempt);
+      }
+    },
+  };
+}
+
+/** Picks the voice engine from the environment (VOICE_ENGINE=cloud or gemini). */
+export function rendererFromEnv(env: NodeJS.ProcessEnv): { renderer: VoiceRenderer; label: string } | null {
+  const key = env.GEMINI_API_KEY || env.GOOGLE_API_KEY;
+  if (!key) return null;
+  if (env.VOICE_ENGINE === "cloud") {
+    return { renderer: createCloudRenderer({ apiKey: key, requestsPerMinute: Number(env.GOOGLE_TTS_RPM ?? 150) }), label: "Google Cloud Chirp 3 HD" };
+  }
+  const model = env.GEMINI_TTS_MODEL || DEFAULT_TTS_MODEL;
+  return {
+    renderer: createGeminiRenderer({ apiKey: key, model, requestsPerMinute: Number(env.GEMINI_TTS_RPM ?? 10) }),
+    label: model,
   };
 }
 
@@ -263,15 +335,16 @@ export class VoiceStudio {
   ) {}
 
   /** Cache key: changes whenever the words, voice or performance change. */
-  static id(line: Pick<VoiceLine, "text" | "casting" | "language">): string {
-    return createHash("sha1").update(`v1|${line.casting.voice}|${prompt(line)}`).digest("hex");
+  static id(line: Pick<VoiceLine, "text" | "casting" | "language">, engine = "gemini"): string {
+    const prefix = engine === "gemini" ? "v1" : `v1|${engine}`;
+    return createHash("sha1").update(`${prefix}|${line.casting.voice}|${prompt(line)}`).digest("hex");
   }
 
   /** What's ready now; starts rendering the rest in the background (in story order). */
   async pack(lines: VoiceLine[]): Promise<PackStatus> {
     const out: PackStatus = { lines: {}, pending: 0, failed: 0 };
     for (const line of lines) {
-      const id = VoiceStudio.id(line);
+      const id = VoiceStudio.id(line, this.renderer.engine);
       const clip = await this.cached(id);
       if (clip) {
         out.lines[line.key] = clip;
@@ -290,7 +363,7 @@ export class VoiceStudio {
 
   /** Renders every line and waits for it (used to pre-voice the library). */
   async renderAll(lines: VoiceLine[]): Promise<{ done: number; failed: number }> {
-    const results = await Promise.all(lines.map((line) => this.render(line, VoiceStudio.id(line))));
+    const results = await Promise.all(lines.map((line) => this.render(line, VoiceStudio.id(line, this.renderer.engine))));
     return { done: results.filter(Boolean).length, failed: results.filter((r) => !r).length };
   }
 
@@ -314,7 +387,12 @@ export class VoiceStudio {
       if (hit) return hit;
       await this.slot();
       try {
-        const { pcm, sampleRate } = await this.renderer.synthesize(prompt(line), line.casting.voice);
+        const { pcm, sampleRate } = await this.renderer.synthesize({
+          prompt: prompt(line),
+          text: line.text,
+          voice: line.casting.voice,
+          language: line.language,
+        });
         const trimmed = trimSilence(pcm, sampleRate);
         const clip: Clip = {
           file: `${id}.wav`,

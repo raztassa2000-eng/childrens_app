@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Library } from "../server/library";
-import { DEFAULT_TTS_MODEL, VoiceStudio, createGeminiRenderer, episodeLines } from "../server/voices";
+import { VoiceStudio, episodeLines, rendererFromEnv } from "../server/voices";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { values: args } = parseArgs({
@@ -34,23 +34,17 @@ const shows = library
   .filter((s) => !args.language || s.language === args.language);
 const lines = shows.flatMap((series) => series.episodes.flatMap((episode) => episodeLines(series, episode)));
 console.log(`${shows.length} shows, ${lines.length} lines to voice.`);
-const rpm = Number(process.env.GEMINI_TTS_RPM ?? 10);
-console.log(`Pacing to ${rpm} lines a minute (set GEMINI_TTS_RPM in .env if your Google plan allows more). Lines already recorded are skipped.`);
+const engine = rendererFromEnv(process.env);
+const cloud = process.env.VOICE_ENGINE === "cloud";
+const rpm = cloud ? Number(process.env.GOOGLE_TTS_RPM ?? 150) : Number(process.env.GEMINI_TTS_RPM ?? 10);
+console.log(`Voices: ${engine?.label ?? "none"}, pacing to ${rpm} lines a minute. Lines already recorded are skipped.`);
 if (args["dry-run"]) process.exit(0);
 
-const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-if (!key) {
+if (!engine) {
   console.error("Set GEMINI_API_KEY first (get one at https://aistudio.google.com/apikey).");
   process.exit(1);
 }
-const studio = new VoiceStudio(
-  createGeminiRenderer({
-    apiKey: key,
-    model: process.env.GEMINI_TTS_MODEL || DEFAULT_TTS_MODEL,
-    requestsPerMinute: Number(process.env.GEMINI_TTS_RPM ?? 10),
-  }),
-  path.resolve(root, process.env.AUDIO_DIR ?? "data/audio"),
-);
+const studio = new VoiceStudio(engine.renderer, path.resolve(root, process.env.AUDIO_DIR ?? "data/audio"));
 
 let done = 0;
 let failed = 0;

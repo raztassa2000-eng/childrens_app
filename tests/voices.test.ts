@@ -8,6 +8,7 @@ import { Library } from "../server/library";
 import {
   VoiceStudio,
   castVoices,
+  createCloudRenderer,
   createGeminiRenderer,
   envelope,
   episodeLines,
@@ -29,8 +30,9 @@ function tone(seconds: number, rate = 24000): Int16Array {
 }
 
 class FakeRenderer implements VoiceRenderer {
+  readonly engine = "gemini";
   calls: Array<{ text: string; voice: string }> = [];
-  async synthesize(text: string, voice: string) {
+  async synthesize({ prompt: text, voice }: { prompt: string; voice: string }) {
     this.calls.push({ text, voice });
     await new Promise((r) => setTimeout(r, 5));
     return { pcm: tone(0.5 + (text.length % 7) / 10), sampleRate: 24000 };
@@ -88,7 +90,7 @@ describe("voice helpers", () => {
       );
     }) as unknown as typeof fetch;
     const renderer = createGeminiRenderer({ apiKey: "test", model: "nope", fetch: fakeFetch, requestsPerMinute: 6000 });
-    const out = await renderer.synthesize("Say hi: hi", "Puck");
+    const out = await renderer.synthesize({ prompt: "Say hi: hi", text: "hi", voice: "Puck", language: "en" });
     expect(out.sampleRate).toBe(24000);
     expect(out.pcm.length).toBe(4800);
     expect(requests[0].url).toContain("/nope:generateContent");
@@ -184,7 +186,7 @@ describe("Gemini rate limits", () => {
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;rate=24000", data: pcm } }] } }] }));
     }) as unknown as typeof fetch;
     const renderer = createGeminiRenderer({ apiKey: "test", fetch: fakeFetch, requestsPerMinute: 6000 });
-    const out = await renderer.synthesize("hi", "Puck");
+    const out = await renderer.synthesize({ prompt: "hi", text: "hi", voice: "Puck", language: "en" });
     expect(out.pcm.length).toBe(480);
     expect(calls).toBe(2);
   });
@@ -196,8 +198,27 @@ describe("Gemini rate limits", () => {
       return new Response(JSON.stringify({ error: { message: "Quota exceeded for metric: generate_requests_per_model_per_day" } }), { status: 429 });
     }) as unknown as typeof fetch;
     const renderer = createGeminiRenderer({ apiKey: "test", fetch: fakeFetch, requestsPerMinute: 6000 });
-    await expect(renderer.synthesize("a", "Puck")).rejects.toThrow();
-    await expect(renderer.synthesize("b", "Puck")).rejects.toThrow(/daily/);
+    await expect(renderer.synthesize({ prompt: "a", text: "a", voice: "Puck", language: "en" })).rejects.toThrow();
+    await expect(renderer.synthesize({ prompt: "b", text: "b", voice: "Puck", language: "en" })).rejects.toThrow(/daily/);
     expect(calls).toBe(1);
+  });
+});
+
+describe("Cloud Chirp 3 HD voices", () => {
+  it("asks for the right locale and voice, and strips the WAV header", async () => {
+    const pcm = tone(0.2);
+    const file = wav(pcm, 24000);
+    let sent: { voice: { languageCode: string; name: string }; input: { text: string } } | null = null;
+    const fakeFetch = (async (_url: string, init: RequestInit) => {
+      sent = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({ audioContent: file.toString("base64") }));
+    }) as unknown as typeof fetch;
+    const renderer = createCloudRenderer({ apiKey: "test", fetch: fakeFetch, requestsPerMinute: 6000 });
+    const out = await renderer.synthesize({ prompt: "Say warmly: שלום", text: "שלום", voice: "Sulafat", language: "he" });
+    expect(sent!.voice).toEqual({ languageCode: "he-IL", name: "he-IL-Chirp3-HD-Sulafat" });
+    expect(sent!.input.text).toBe("שלום");
+    expect(out.sampleRate).toBe(24000);
+    expect(out.pcm.length).toBe(pcm.length);
+    expect(out.pcm[pcm.length >> 1]).toBe(pcm[pcm.length >> 1]);
   });
 });

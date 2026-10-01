@@ -8,6 +8,8 @@
  *   npm run seed -- --categories animals,space --ages 3-5,6-8 --per 2
  *   npm run seed -- --language es --per 1 --yes
  *   npm run seed -- --language he,en,fr --yes       # a different set of shows in each language
+ *   npm run seed -- --language he,en,fr --yes --resume msgbatch_...
+ *        # collect a batch that's already running (same options as the run that started it)
  */
 import "../server/env";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -35,6 +37,7 @@ const { values: args } = parseArgs({
     episodes: { type: "string", default: "3" },
     language: { type: "string", default: "en" },
     "dry-run": { type: "boolean", default: false },
+    resume: { type: "string" },
     yes: { type: "boolean", default: false },
   },
 });
@@ -96,9 +99,14 @@ const client = new Anthropic();
 const library = new Library({ seeded: outDir, generated: path.join(root, "data", "series") });
 await library.load();
 
-async function runBatch(requests: Anthropic.Messages.BatchCreateParams.Request[], label: string) {
-  const batch = await client.messages.batches.create({ requests });
-  console.log(`${label}: batch ${batch.id} submitted (${requests.length} requests). Results usually arrive within minutes.`);
+async function runBatch(requests: Anthropic.Messages.BatchCreateParams.Request[], label: string, existing?: string) {
+  const batch = existing ? await client.messages.batches.retrieve(existing) : await client.messages.batches.create({ requests });
+  console.log(
+    existing
+      ? `${label}: picking up batch ${batch.id}.`
+      : `${label}: batch ${batch.id} submitted (${requests.length} requests). Big batches can take a few hours.\n` +
+          `  If you stop this script, the batch keeps running: collect it later with --resume ${batch.id}`,
+  );
   let status = batch;
   while (status.processing_status !== "ended") {
     await new Promise((r) => setTimeout(r, 30_000));
@@ -130,6 +138,7 @@ const written = await runBatch(
     ),
   })),
   "Writing",
+  args.resume,
 );
 
 const drafts = new Map<string, Series>();

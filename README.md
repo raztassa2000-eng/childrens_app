@@ -99,6 +99,7 @@ The iOS build plays sound even with the silent switch on (like other video apps)
 npm run seed -- --dry-run                                   # see the plan and a rough cost
 npm run seed -- --categories animals,space --ages 3-5,6-8 --per 2
 npm run seed -- --language es --per 1 --yes                 # Spanish shows for every world
+npm run seed -- --language he,en,fr --yes                   # 378 episodes: different shows in each language
 ```
 
 This writes every series with the Message Batches API (50% cheaper), runs the safety review as a second batch, and saves the shows that pass to `content/series/*.json`. Commit them to ship them with the server. A dry run shows about **$0.12 per 3-episode series**.

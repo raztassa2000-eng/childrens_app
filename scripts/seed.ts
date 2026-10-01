@@ -7,6 +7,7 @@
  *   npm run seed -- --dry-run                       # plan + rough cost, no API calls
  *   npm run seed -- --categories animals,space --ages 3-5,6-8 --per 2
  *   npm run seed -- --language es --per 1 --yes
+ *   npm run seed -- --language he,en,fr --yes       # a different set of shows in each language
  */
 import "../server/env";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -42,38 +43,44 @@ const categories = args.categories === "all" ? CATEGORIES : args.categories.spli
 const ages = args.ages.split(",").map((a) => a.trim()) as AgeGroup[];
 const per = Math.max(1, Number(args.per));
 const episodes = Math.min(6, Math.max(1, Number(args.episodes)));
-const language = args.language;
+const languages = args.language.split(",").map((l) => l.trim()).filter(Boolean);
 
 if (categories.some((c) => !c)) throw new Error(`Unknown category. Use: ${CATEGORIES.map((c) => c.id).join(", ")}`);
 if (ages.some((a) => !AGE_GROUPS.includes(a))) throw new Error(`Unknown age group. Use: ${AGE_GROUPS.join(", ")}`);
-if (!(language in LANGUAGE_NAMES)) throw new Error(`Unsupported language. Use: ${Object.keys(LANGUAGE_NAMES).join(", ")}`);
+if (languages.some((l) => !(l in LANGUAGE_NAMES))) throw new Error(`Unsupported language. Use: ${Object.keys(LANGUAGE_NAMES).join(", ")}`);
 
 interface Planned {
   customId: string;
   categoryId: string;
   age: AgeGroup;
   topic: string;
+  language: string;
 }
 
 // Topics are listed from simplest to most advanced, so older kids start further
 // down the list; each extra series takes the next topic so shows don't repeat.
+// Each language starts one topic later, so every language gets its own shows.
 const plan: Planned[] = [];
-for (const category of categories) {
-  ages.forEach((age) => {
-    const start = Math.floor((AGE_GROUPS.indexOf(age) * category.topics.length) / AGE_GROUPS.length);
-    for (let i = 0; i < per; i++) {
-      const topic = category.topics[(start + i) % category.topics.length];
-      plan.push({ customId: `${category.id}__${age.replace("-", "to")}__${i}`, categoryId: category.id, age, topic });
-    }
-  });
-}
+languages.forEach((language, li) => {
+  for (const category of categories) {
+    ages.forEach((age) => {
+      const start = Math.floor((AGE_GROUPS.indexOf(age) * category.topics.length) / AGE_GROUPS.length) + li * per;
+      for (let i = 0; i < per; i++) {
+        const topic = category.topics[(start + i) % category.topics.length];
+        const customId = `${language}__${category.id}__${age.replace("-", "to")}__${i}`;
+        plan.push({ customId, categoryId: category.id, age, topic, language });
+      }
+    });
+  }
+});
 
 // Rough estimate at batch prices for Claude Opus 5.5 ($2 / $10 per million input/output tokens):
 // ~3k input + ~9k output tokens to write a series, ~6k input + ~1k output to review it.
 const estimate = plan.length * (3_000 * 2 + 9_000 * 10 + 6_000 * 2 + 1_000 * 10) / 1_000_000;
 
-console.log(`Plan: ${plan.length} new series (${episodes} episodes each) in ${LANGUAGE_NAMES[language]} with ${MODEL}`);
-for (const p of plan) console.log(`  • ${p.categoryId.padEnd(11)} ages ${p.age.padEnd(5)} ${p.topic}`);
+const names = languages.map((l) => LANGUAGE_NAMES[l]).join(", ");
+console.log(`Plan: ${plan.length} new series × ${episodes} episodes = ${plan.length * episodes} episodes, in ${names}, with ${MODEL}`);
+for (const p of plan) console.log(`  • ${p.language} ${p.categoryId.padEnd(11)} ages ${p.age.padEnd(5)} ${p.topic}`);
 console.log(`Rough cost: about $${estimate.toFixed(2)} (batch pricing; real usage varies).`);
 
 if (args["dry-run"]) process.exit(0);
@@ -116,7 +123,7 @@ const written = await runBatch(
         category: CATEGORY_BY_ID[p.categoryId],
         topic: p.topic,
         age: p.age,
-        language,
+        language: p.language,
         episodes,
         existingTitles: library.titlesIn(p.categoryId).slice(0, 40),
       }),
@@ -133,7 +140,7 @@ for (const p of plan) {
     const raw = parseStructured(reply, GenSeriesSchema);
     const category = CATEGORY_BY_ID[p.categoryId];
     const id = `${category.id}.${slugify(raw.title, 28)}-${Math.random().toString(16).slice(2, 8)}`;
-    drafts.set(p.customId, normalizeSeries(raw, { id, category: category.id, age: p.age, language, fallbackEmoji: category.emoji }));
+    drafts.set(p.customId, normalizeSeries(raw, { id, category: category.id, age: p.age, language: p.language, fallbackEmoji: category.emoji }));
   } catch (error) {
     console.warn(`  ✗ ${p.customId}: ${(error as Error).message}`);
   }

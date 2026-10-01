@@ -20,7 +20,7 @@ await library.load();
 const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 const ttsModel = process.env.GEMINI_TTS_MODEL || DEFAULT_TTS_MODEL;
 const voices = geminiKey
-  ? new VoiceStudio(createGeminiRenderer({ apiKey: geminiKey, model: ttsModel }), path.resolve(root, process.env.AUDIO_DIR ?? "data/audio"))
+  ? new VoiceStudio(createGeminiRenderer({ apiKey: geminiKey, model: ttsModel, requestsPerMinute: Number(process.env.GEMINI_TTS_RPM ?? 10) }), path.resolve(root, process.env.AUDIO_DIR ?? "data/audio"))
   : null;
 
 const aiConfigured = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);

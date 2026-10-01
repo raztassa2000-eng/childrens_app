@@ -97,19 +97,43 @@ class GeminiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** How long Google asked us to wait before trying again. */
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
   }
 }
 
+/** Reads "Please retry in 31.4s" / RetryInfo.retryDelay "31s" from a Gemini error. */
+function retryDelay(body: { error?: { message?: string; details?: Array<{ retryDelay?: string }> } }): number | null {
+  const fromDetails = body.error?.details?.find((d) => d.retryDelay)?.retryDelay;
+  const match = /([\d.]+)s/.exec(fromDetails ?? "") ?? /retry in ([\d.]+)s/i.exec(body.error?.message ?? "");
+  return match ? Math.ceil(Number(match[1]) * 1000) : null;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export function createGeminiRenderer(options: {
   apiKey: string;
   model?: string;
   fetch?: typeof fetch;
+  /** Stay under the key's per-minute limit (Google's free plan allows 10). */
+  requestsPerMinute?: number;
 }): VoiceRenderer {
   const doFetch = options.fetch ?? fetch;
   const models = [options.model ?? DEFAULT_TTS_MODEL, ...FALLBACK_MODELS].filter((m, i, all) => all.indexOf(m) === i);
   let modelIndex = 0;
+  const interval = 60_000 / Math.max(1, options.requestsPerMinute ?? 10);
+  let nextSlot = 0;
+  let dailyLimitHit = false;
+
+  /** Spaces requests evenly; every caller reserves its slot before waiting. */
+  const pace = async () => {
+    const now = Date.now();
+    const at = Math.max(now, nextSlot);
+    nextSlot = at + interval;
+    if (at > now) await sleep(at - now);
+  };
 
   const call = async (model: string, text: string, voice: string) => {
     const res = await doFetch(`${ENDPOINT}/${encodeURIComponent(model)}:generateContent`, {
@@ -124,10 +148,10 @@ export function createGeminiRenderer(options: {
       }),
     });
     const body = (await res.json().catch(() => ({}))) as {
-      error?: { message?: string };
+      error?: { message?: string; details?: Array<{ retryDelay?: string }> };
       candidates?: Array<{ content?: { parts?: Array<{ inlineData?: { data?: string; mimeType?: string } }> } }>;
     };
-    if (!res.ok) throw new GeminiError(body.error?.message ?? `Gemini TTS failed (${res.status})`, res.status);
+    if (!res.ok) throw new GeminiError(body.error?.message ?? `Gemini TTS failed (${res.status})`, res.status, retryDelay(body));
     const part = body.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData;
     if (!part?.data) throw new GeminiError("Gemini TTS returned no audio", 502);
     const rate = Number(/rate=(\d+)/.exec(part.mimeType ?? "")?.[1] ?? 24000);
@@ -140,18 +164,30 @@ export function createGeminiRenderer(options: {
   return {
     async synthesize(text, voice) {
       for (let attempt = 0; ; attempt++) {
+        if (dailyLimitHit) throw new GeminiError("Google's daily voice limit for this key is used up. Run again tomorrow, or turn on billing in Google AI Studio.", 429);
+        await pace();
         try {
           return await call(models[modelIndex], text, voice);
         } catch (error) {
           const status = error instanceof GeminiError ? error.status : 0;
+          if (status === 429 && /per[ _-]?day|daily/i.test((error as Error).message)) {
+            dailyLimitHit = true;
+            throw error;
+          }
+          if (status === 429 && attempt < 8) {
+            // Too fast: everyone waits as long as Google asks, then carries on.
+            const wait = (error as GeminiError).retryAfterMs ?? 30_000;
+            nextSlot = Math.max(nextSlot, Date.now() + wait);
+            continue;
+          }
           // Unknown model for this key: move on to the next model name.
           if ((status === 404 || status === 400) && /model/i.test((error as Error).message) && modelIndex < models.length - 1) {
             modelIndex++;
             continue;
           }
-          const retryable = status === 429 || status >= 500 || status === 0;
+          const retryable = status >= 500 || status === 0;
           if (!retryable || attempt >= 3) throw error;
-          await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt));
+          await sleep(1500 * 2 ** attempt);
         }
       }
     },

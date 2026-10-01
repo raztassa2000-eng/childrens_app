@@ -34,6 +34,8 @@ const shows = library
   .filter((s) => !args.language || s.language === args.language);
 const lines = shows.flatMap((series) => series.episodes.flatMap((episode) => episodeLines(series, episode)));
 console.log(`${shows.length} shows, ${lines.length} lines to voice.`);
+const rpm = Number(process.env.GEMINI_TTS_RPM ?? 10);
+console.log(`Pacing to ${rpm} lines a minute (set GEMINI_TTS_RPM in .env if your Google plan allows more). Lines already recorded are skipped.`);
 if (args["dry-run"]) process.exit(0);
 
 const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
@@ -42,7 +44,11 @@ if (!key) {
   process.exit(1);
 }
 const studio = new VoiceStudio(
-  createGeminiRenderer({ apiKey: key, model: process.env.GEMINI_TTS_MODEL || DEFAULT_TTS_MODEL }),
+  createGeminiRenderer({
+    apiKey: key,
+    model: process.env.GEMINI_TTS_MODEL || DEFAULT_TTS_MODEL,
+    requestsPerMinute: Number(process.env.GEMINI_TTS_RPM ?? 10),
+  }),
   path.resolve(root, process.env.AUDIO_DIR ?? "data/audio"),
 );
 

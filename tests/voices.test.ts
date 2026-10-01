@@ -87,7 +87,7 @@ describe("voice helpers", () => {
         }),
       );
     }) as unknown as typeof fetch;
-    const renderer = createGeminiRenderer({ apiKey: "test", model: "nope", fetch: fakeFetch });
+    const renderer = createGeminiRenderer({ apiKey: "test", model: "nope", fetch: fakeFetch, requestsPerMinute: 6000 });
     const out = await renderer.synthesize("Say hi: hi", "Puck");
     expect(out.sampleRate).toBe(24000);
     expect(out.pcm.length).toBe(4800);
@@ -169,5 +169,35 @@ describe("voice API", () => {
     expect((await pack({ seriesId: "nope.nope", episode: 1 })).status).toBe(404);
     expect((await pack({ seriesId: hebrew.id, episode: 99 })).status).toBe(404);
     expect((await fetch(`${base}/api/audio/..%2Fsecret.wav`)).status).toBe(404);
+  });
+});
+
+describe("Gemini rate limits", () => {
+  it("waits as long as Google asks after a 429, then succeeds", async () => {
+    let calls = 0;
+    const pcm = Buffer.alloc(480 * 2).toString("base64");
+    const fakeFetch = (async () => {
+      calls++;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: { message: "Quota exceeded for metric: requests per minute. Please retry in 0.05s." } }), { status: 429 });
+      }
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;rate=24000", data: pcm } }] } }] }));
+    }) as unknown as typeof fetch;
+    const renderer = createGeminiRenderer({ apiKey: "test", fetch: fakeFetch, requestsPerMinute: 6000 });
+    const out = await renderer.synthesize("hi", "Puck");
+    expect(out.pcm.length).toBe(480);
+    expect(calls).toBe(2);
+  });
+
+  it("stops asking once the daily limit is used up", async () => {
+    let calls = 0;
+    const fakeFetch = (async () => {
+      calls++;
+      return new Response(JSON.stringify({ error: { message: "Quota exceeded for metric: generate_requests_per_model_per_day" } }), { status: 429 });
+    }) as unknown as typeof fetch;
+    const renderer = createGeminiRenderer({ apiKey: "test", fetch: fakeFetch, requestsPerMinute: 6000 });
+    await expect(renderer.synthesize("a", "Puck")).rejects.toThrow();
+    await expect(renderer.synthesize("b", "Puck")).rejects.toThrow(/daily/);
+    expect(calls).toBe(1);
   });
 });

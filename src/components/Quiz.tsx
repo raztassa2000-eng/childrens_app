@@ -4,6 +4,7 @@ import { sfx } from "../engine/sfx";
 import { getSpeech } from "../engine/speech";
 import { haptic } from "../lib/native";
 import { useStore } from "../lib/store";
+import { useT } from "../i18n";
 
 interface Props {
   series: Series;
@@ -24,6 +25,7 @@ function shuffle<T>(items: T[]): T[] {
 /** "Did you catch it?" — a gentle quiz after each episode. A star for each first-try answer. */
 export function Quiz({ series, questions, colors, onDone }: Props) {
   const { settings } = useStore();
+  const t = useT();
   const shuffled = useMemo(
     () => questions.map((q) => ({ ...q, order: shuffle(q.choices.map((_, i) => i)) })),
     [questions],
@@ -43,7 +45,7 @@ export function Quiz({ series, questions, colors, onDone }: Props) {
   };
 
   useEffect(() => {
-    if (q) say(`${q.question} ${q.order.map((i) => q.choices[i]).join(", or ")}?`);
+    if (q) say(`${q.question} ${q.order.map((i) => q.choices[i]).join(`, ${t.or} `)}?`);
     return () => getSpeech().cancel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index]);
@@ -57,7 +59,7 @@ export function Quiz({ series, questions, colors, onDone }: Props) {
       if (tried.length === 0) setStars((s) => s + 1);
       sfx.correct();
       haptic.success();
-      say(q.explanation || "Yes! Great job!");
+      say(q.explanation || t.quizYes);
     } else {
       setTried((t) => [...t, choice]);
       setShake(choice);
@@ -80,7 +82,7 @@ export function Quiz({ series, questions, colors, onDone }: Props) {
   return (
     <div className="quiz" style={{ ["--c1" as string]: colors[0], ["--c2" as string]: colors[1] }}>
       <div className="quiz__header">
-        <span className="quiz__title">🧠 Did you catch it?</span>
+        <span className="quiz__title">{t.quizTitle}</span>
         <span className="quiz__dots">
           {shuffled.map((_, i) => (
             <span key={i} className={i < index ? "done" : i === index ? "now" : ""} />
@@ -115,11 +117,11 @@ export function Quiz({ series, questions, colors, onDone }: Props) {
               {q.explanation}
             </p>
             <button className="btn btn--primary btn--big" onClick={next}>
-              {index + 1 >= shuffled.length ? "See my stars ⭐" : "Next ➜"}
+              {index + 1 >= shuffled.length ? t.quizSeeStars : t.quizNext}
             </button>
           </>
         ) : (
-          <p className="quiz__hint">{tried.length > 0 ? "Almost! Try another one 💪" : "Tap the right answer"}</p>
+          <p className="quiz__hint">{tried.length > 0 ? t.quizAlmost : t.quizHint}</p>
         )}
       </div>
     </div>

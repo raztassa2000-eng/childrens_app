@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AGE_PROFILES, CATEGORIES, CATEGORY_BY_ID, LANGUAGES } from "../../shared/categories";
+import { localCategory } from "../../shared/categoryText";
 import { AGE_GROUPS, type AgeGroup } from "../../shared/types";
 import { EmptyState, Loading, ParentGate, categoryColors } from "../components/Bits";
 import { sfx } from "../engine/sfx";
@@ -8,19 +9,10 @@ import { forgetSeries, refreshCatalog, useCatalog, useSeries } from "../lib/cata
 import { haptic } from "../lib/native";
 import { href } from "../lib/router";
 import { useStore } from "../lib/store";
-
-const MAGIC_LINES = [
-  "Waving the magic wand…",
-  "Inventing lovable characters…",
-  "Writing funny jokes…",
-  "Painting the backgrounds…",
-  "Teaching the characters their lines…",
-  "Composing a theme song…",
-  "Checking every fact…",
-  "Making sure it's kind and safe…",
-];
+import { useT } from "../i18n";
 
 function JobProgress({ job, onRetry }: { job: Job; onRetry: () => void }) {
+  const t = useT();
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const timer = window.setInterval(() => setTick((t) => t + 1), 2600);
@@ -31,10 +23,10 @@ function JobProgress({ job, onRetry }: { job: Job; onRetry: () => void }) {
     return (
       <div className="magic">
         <div className="magic__stage">🙈</div>
-        <h2>Oops, the magic fizzled</h2>
-        <p>{job.error ?? "Something went wrong. Let's try again!"}</p>
+        <h2>{t.magicFizzled}</h2>
+        <p>{job.error ?? t.somethingWrong}</p>
         <button className="btn btn--primary btn--big" onClick={onRetry}>
-          Try again
+          {t.tryAgain}
         </button>
       </div>
     );
@@ -44,13 +36,13 @@ function JobProgress({ job, onRetry }: { job: Job; onRetry: () => void }) {
     return (
       <div className="magic magic--done">
         <div className="magic__stage">🎬</div>
-        <h2>{job.kind === "episode" ? "Your new episode is ready!" : "Your show is ready!"}</h2>
+        <h2>{job.kind === "episode" ? t.episodeReady : t.showReady}</h2>
         <div className="finish__actions">
           <a className="btn btn--primary btn--big" href={href({ name: "watch", id: job.seriesId, episode: job.episode ?? 1 })}>
-            ▶ Watch it now
+            {t.watchItNow}
           </a>
           <a className="btn btn--ghost" href={href({ name: "series", id: job.seriesId })}>
-            See the show
+            {t.seeTheShow}
           </a>
         </div>
       </div>
@@ -66,12 +58,11 @@ function JobProgress({ job, onRetry }: { job: Job; onRetry: () => void }) {
         <span className="magic__spark s2">⭐</span>
         <span className="magic__spark s3">💫</span>
       </div>
-      <h2>{job.status === "checking" ? "Checking it's perfect for kids…" : MAGIC_LINES[tick % MAGIC_LINES.length]}</h2>
+      <h2>{job.status === "checking" ? t.checkingKids : t.magicLines[tick % t.magicLines.length]}</h2>
       <div className="meter">
         <div className="meter__fill" style={{ width: `${progress * 100}%` }} />
       </div>
-      <p className="muted">{job.message}</p>
-      <p className="muted small">Real animators take months. The AI needs about a minute!</p>
+      <p className="muted small">{t.aiTakesMinute}</p>
     </div>
   );
 }
@@ -114,28 +105,26 @@ function useJob(start: () => Promise<{ job: Job }>) {
 
 function SeriesMaker({ initialCategory, initialTopic }: { initialCategory?: string; initialTopic?: string }) {
   const { settings } = useStore();
+  const t = useT();
   const [category, setCategory] = useState(initialCategory && CATEGORY_BY_ID[initialCategory] ? initialCategory : "");
   const [topic, setTopic] = useState(initialTopic ?? "");
   const [idea, setIdea] = useState("");
   const [age, setAge] = useState<AgeGroup>(settings.age === "all" ? "6-8" : settings.age);
-  const [language, setLanguage] = useState(() => {
-    const device = navigator.language.slice(0, 2).toLowerCase();
-    return LANGUAGES.some((l) => l.code === device) ? device : "en";
-  });
+  const [language, setLanguage] = useState<string>(settings.language);
   const { job, error, run, reset } = useJob(() =>
     startSeriesJob({ category, topic: topic || undefined, idea: idea.trim() || undefined, age, language }),
   );
 
   if (job) return <JobProgress job={job} onRetry={reset} />;
 
-  const chosen = CATEGORY_BY_ID[category];
+  const chosen = CATEGORY_BY_ID[category] && localCategory(CATEGORY_BY_ID[category], settings.language);
   return (
     <div className="maker">
       <h2 className="maker__step">
-        <span>1</span> Pick a world
+        <span>1</span> {t.step1}
       </h2>
       <div className="worlds worlds--compact">
-        {CATEGORIES.map((c) => (
+        {CATEGORIES.map((c) => localCategory(c, settings.language)).map((c) => (
           <button
             key={c.id}
             className={`world ${category === c.id ? "world--on" : ""}`}
@@ -155,38 +144,38 @@ function SeriesMaker({ initialCategory, initialTopic }: { initialCategory?: stri
       {chosen && (
         <>
           <h2 className="maker__step">
-            <span>2</span> What should it be about?
+            <span>2</span> {t.step2}
           </h2>
           <div className="chips chips--wrap">
-            {chosen.topics.map((t) => (
-              <button key={t} className={`chip ${topic === t ? "chip--on" : ""}`} onClick={() => setTopic(topic === t ? "" : t)}>
-                {t}
+            {chosen.topics.map((name) => (
+              <button key={name} className={`chip ${topic === name ? "chip--on" : ""}`} onClick={() => setTopic(topic === name ? "" : name)}>
+                {name}
               </button>
             ))}
           </div>
           <label className="field">
-            <span>Or your own idea (optional)</span>
+            <span>{t.ownIdea}</span>
             <input
               value={idea}
               maxLength={120}
-              placeholder={`e.g. ${chosen.id === "animals" ? "Why do cats purr?" : "A robot who learns to share"}`}
+              placeholder={t.ideaExample}
               onChange={(e) => setIdea(e.target.value)}
               dir="auto"
             />
           </label>
 
           <h2 className="maker__step">
-            <span>3</span> Who is it for?
+            <span>3</span> {t.step3}
           </h2>
           <div className="chips">
             {AGE_GROUPS.map((g) => (
               <button key={g} className={`chip ${age === g ? "chip--on" : ""}`} onClick={() => setAge(g)}>
-                {AGE_PROFILES[g].emoji} {AGE_PROFILES[g].range}
+                {AGE_PROFILES[g].emoji} {t.ages(g.replace("-", "–"))}
               </button>
             ))}
           </div>
           <label className="field field--inline">
-            <span>Language</span>
+            <span>{t.language}</span>
             <select value={language} onChange={(e) => setLanguage(e.target.value)}>
               {LANGUAGES.map((l) => (
                 <option key={l.code} value={l.code}>
@@ -205,10 +194,10 @@ function SeriesMaker({ initialCategory, initialTopic }: { initialCategory?: stri
               void run();
             }}
           >
-            🪄 Make my show!
+            {t.makeMyShow}
           </button>
           <p className="muted small center">
-            A new mini-series with 3 episodes of {AGE_PROFILES[age].length} each.
+            {t.newSeriesNote(t.lengths[age])}
           </p>
         </>
       )}
@@ -218,11 +207,12 @@ function SeriesMaker({ initialCategory, initialTopic }: { initialCategory?: stri
 
 function EpisodeMaker({ seriesId }: { seriesId: string }) {
   const { series, error: loadError } = useSeries(seriesId);
+  const t = useT();
   const [idea, setIdea] = useState("");
   const { job, error, run, reset } = useJob(() => startEpisodeJob(seriesId, idea.trim() || undefined));
 
   if (job) return <JobProgress job={job} onRetry={reset} />;
-  if (loadError) return <EmptyState emoji="🙈" title="We couldn't find that show" />;
+  if (loadError) return <EmptyState emoji="🙈" title={t.showNotFound} />;
   if (!series) return <Loading />;
   const colors = categoryColors(series.category);
 
@@ -231,18 +221,18 @@ function EpisodeMaker({ seriesId }: { seriesId: string }) {
       <div className="maker__show" style={{ background: `linear-gradient(135deg, ${colors[0]}, ${colors[1]})` }}>
         <span className="maker__show-emoji">{series.emoji}</span>
         <div>
-          <h2>{series.title}</h2>
+          <h2 dir="auto">{series.title}</h2>
           <p>
             {series.cast.map((c) => `${c.emoji} ${c.name}`).join("  ·  ")}
           </p>
         </div>
       </div>
       <h2 className="maker__step">
-        <span>✨</span> Episode {series.episodes.length + 1}
+        <span>✨</span> {t.episodeN(series.episodes.length + 1)}
       </h2>
       <label className="field">
-        <span>What should happen next? (optional)</span>
-        <input value={idea} maxLength={120} placeholder="e.g. They visit the ocean" onChange={(e) => setIdea(e.target.value)} dir="auto" />
+        <span>{t.whatNext}</span>
+        <input value={idea} maxLength={120} placeholder={t.whatNextExample} onChange={(e) => setIdea(e.target.value)} dir="auto" />
       </label>
       {error && <p className="error">{error}</p>}
       <button
@@ -253,7 +243,7 @@ function EpisodeMaker({ seriesId }: { seriesId: string }) {
           void run();
         }}
       >
-        🪄 Make the next episode!
+        {t.makeNextBtn}
       </button>
     </div>
   );
@@ -262,9 +252,10 @@ function EpisodeMaker({ seriesId }: { seriesId: string }) {
 export function Studio({ category, series, topic }: { category?: string; series?: string; topic?: string }) {
   const catalog = useCatalog();
   const { settings } = useStore();
+  const t = useT();
   const [unlocked, setUnlocked] = useState(settings.studioForKids);
 
-  if (!unlocked) return <ParentGate title="Magic Studio" onPass={() => setUnlocked(true)} onCancel={() => history.back()} />;
+  if (!unlocked) return <ParentGate title={t.studioBannerTitle} onPass={() => setUnlocked(true)} onCancel={() => history.back()} />;
   if (!catalog) return <Loading />;
 
   return (
@@ -272,17 +263,15 @@ export function Studio({ category, series, topic }: { category?: string; series?
       <section className="banner banner--studio">
         <span className="banner__emoji">🪄</span>
         <div>
-          <h1>Magic Studio</h1>
-          <p>Dream up a cartoon. The AI writes it, animates it and gives every character a voice.</p>
+          <h1>{t.studioBannerTitle}</h1>
+          <p>{t.studioIntro}</p>
         </div>
       </section>
       {!catalog.ai ? (
-        <EmptyState emoji="😴" title="The Magic Studio is asleep">
-          <p className="muted">
-            A grown-up needs to start the WonderWhirl server with an AI key. You can still watch all the built-in shows!
-          </p>
+        <EmptyState emoji="😴" title={t.studioAsleep}>
+          <p className="muted">{t.studioAsleepText}</p>
           <a className="btn btn--ghost" href={href({ name: "parents" })}>
-            Grown-ups: how to set it up
+            {t.studioSetupLink}
           </a>
         </EmptyState>
       ) : series ? (

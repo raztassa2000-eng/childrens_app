@@ -48,9 +48,13 @@ function withMark(text: string, mark: string): string {
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
 
 /** Rough seconds a friendly narrator needs to say `text` at speech `rate`. */
+const HEBREW = /[\u0590-\u05FF]/;
+
 export function speechSeconds(text: string, rate = 1): number {
   const cjkChars = text.match(CJK)?.length ?? 0;
-  const words = text.replace(CJK, " ").split(/\s+/).filter(Boolean).length + cjkChars / 1.7;
+  // Hebrew glues prefixes ("and", "the", "in") onto words, so each written word carries more sound.
+  const hebrew = HEBREW.test(text) ? 1.25 : 1;
+  const words = text.replace(CJK, " ").split(/\s+/).filter(Boolean).length * hebrew + cjkChars / 1.7;
   return Math.max(1.1, words / (2.6 * rate) + 0.3);
 }
 

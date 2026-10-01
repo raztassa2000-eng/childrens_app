@@ -120,7 +120,7 @@ button {
 .topbar__nav {
   display: none;
   gap: 6px;
-  margin-left: 12px;
+  margin-inline-start: 12px;
 }
 .topbar__link {
   padding: 8px 14px;
@@ -134,7 +134,7 @@ button {
 }
 
 .stars-pill {
-  margin-left: auto;
+  margin-inline-start: auto;
   padding: 6px 14px;
   border-radius: 999px;
   background: linear-gradient(135deg, #fff3b0, #ffd23f);
@@ -462,7 +462,7 @@ button {
   animation: wiggle 2s ease-in-out infinite;
 }
 .studio-banner__go {
-  margin-left: auto;
+  margin-inline-start: auto;
   font-size: 2rem;
 }
 
@@ -501,11 +501,11 @@ button {
   box-shadow: var(--shadow);
   display: none;
 }
-.row__arrow--left {
-  left: -10px;
+.row__arrow--start {
+  inset-inline-start: -10px;
 }
-.row__arrow--right {
-  right: -10px;
+.row__arrow--end {
+  inset-inline-end: -10px;
 }
 
 /* Series cards */
@@ -863,7 +863,7 @@ button {
 }
 .subtitle__who {
   display: inline-block;
-  margin-right: 4px;
+  margin-inline-end: 4px;
   padding: 1px 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
@@ -1098,7 +1098,7 @@ button {
   background: #f3efff;
   font-size: 1.15rem;
   font-weight: 600;
-  text-align: left;
+  text-align: start;
   box-shadow: 0 4px 0 #ddd3ff;
   transition: transform 0.1s, background 0.2s;
 }
@@ -1723,4 +1723,13 @@ button {
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
+}
+
+/* Right-to-left (Hebrew): mirror arrows; media controls stay left-to-right like every video player. */
+[dir="rtl"] .row__arrow {
+  transform: scaleX(-1);
+}
+.player__controls,
+.scrubber {
+  direction: ltr;
 }

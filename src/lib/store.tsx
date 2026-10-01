@@ -1,9 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { AgeGroup } from "../../shared/types";
+import type { AppLanguage } from "../i18n";
 
 /** Settings and progress, saved on the device. */
 
 export interface Settings {
+  /** Interface and show language. */
+  language: AppLanguage;
   age: AgeGroup | "all";
   narration: boolean;
   music: boolean;
@@ -29,6 +32,7 @@ export interface Progress {
 }
 
 const DEFAULT_SETTINGS: Settings = {
+  language: "he",
   age: "all",
   narration: true,
   music: true,

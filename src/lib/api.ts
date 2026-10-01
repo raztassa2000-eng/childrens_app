@@ -43,6 +43,8 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 10000): 
 export interface Health {
   ok: boolean;
   ai: boolean;
+  /** Natural AI voices (Gemini) are configured on the server. */
+  voices: boolean;
   model: string | null;
   safetyReview: boolean;
 }
@@ -50,6 +52,7 @@ export interface Health {
 export interface Catalog {
   series: SeriesSummary[];
   ai: boolean;
+  voices: boolean;
   offline: boolean;
 }
 
@@ -61,10 +64,10 @@ export async function loadCatalog(): Promise<Catalog> {
       request<{ series: SeriesSummary[] }>("/api/catalog"),
       request<Health>("/api/health"),
     ]);
-    return { series: catalog.series, ai: health.ai, offline: false };
+    return { series: catalog.series, ai: health.ai, voices: Boolean(health.voices), offline: false };
   } catch {
     const { BUILTIN_SERIES } = await builtin();
-    return { series: BUILTIN_SERIES.map(summarize), ai: false, offline: true };
+    return { series: BUILTIN_SERIES.map(summarize), ai: false, voices: false, offline: true };
   }
 }
 

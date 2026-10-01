@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { useStore, StoreProvider } from "./lib/store";
+import { RTL_LANGUAGES, useT } from "./i18n";
 import { href, useRoute, type Route } from "./lib/router";
 import { useCatalog } from "./lib/catalog";
 import { Home } from "./pages/Home";
@@ -27,41 +29,48 @@ function Page({ route }: { route: Route }) {
 
 function Shell() {
   const route = useRoute();
-  const { progress } = useStore();
+  const { progress, settings } = useStore();
   const catalog = useCatalog();
-  const tabs: Array<{ route: Route; icon: string; label: string; active: boolean }> = [
-    { route: { name: "home" }, icon: "🏠", label: "Home", active: ["home", "category", "series", "watch"].includes(route.name) },
-    { route: { name: "studio" }, icon: "🪄", label: "Studio", active: route.name === "studio" },
-    { route: { name: "parents" }, icon: "🔒", label: "Grown-ups", active: route.name === "parents" },
+  const t = useT();
+
+  useEffect(() => {
+    document.documentElement.lang = settings.language;
+    document.documentElement.dir = RTL_LANGUAGES.has(settings.language) ? "rtl" : "ltr";
+  }, [settings.language]);
+
+  const tabs: Array<{ route: Route; icon: string; label: string; active: boolean; studio?: boolean }> = [
+    { route: { name: "home" }, icon: "🏠", label: t.home, active: ["home", "category", "series", "watch"].includes(route.name) },
+    { route: { name: "studio" }, icon: "🪄", label: t.studio, active: route.name === "studio", studio: true },
+    { route: { name: "parents" }, icon: "🔒", label: t.grownUps, active: route.name === "parents" },
   ];
 
   return (
     <div className={`app app--${route.name}`}>
       <header className="topbar">
-        <a className="logo" href="#/" aria-label="WonderWhirl home">
+        <a className="logo" href="#/" aria-label="WonderWhirl" dir="ltr">
           <span className="logo__swirl">🌀</span>
           <span className="logo__text">WonderWhirl</span>
         </a>
         <nav className="topbar__nav">
-          {tabs.map((t) => (
-            <a key={t.label} className={`topbar__link ${t.active ? "is-active" : ""}`} href={href(t.route)}>
-              {t.icon} {t.label}
+          {tabs.map((tab) => (
+            <a key={tab.icon} className={`topbar__link ${tab.active ? "is-active" : ""}`} href={href(tab.route)}>
+              {tab.icon} {tab.label}
             </a>
           ))}
         </nav>
-        <span className="stars-pill" title="Quiz stars">
+        <span className="stars-pill" title={t.quizStars}>
           ⭐ {progress.stars}
         </span>
       </header>
 
       <Page route={route} />
 
-      <nav className="tabbar" aria-label="Main">
-        {tabs.map((t) => (
-          <a key={t.label} className={`tabbar__tab ${t.active ? "is-active" : ""}`} href={href(t.route)}>
-            <span className="tabbar__icon">{t.icon}</span>
-            <span>{t.label}</span>
-            {t.label === "Studio" && catalog?.ai && <span className="tabbar__dot" />}
+      <nav className="tabbar">
+        {tabs.map((tab) => (
+          <a key={tab.icon} className={`tabbar__tab ${tab.active ? "is-active" : ""}`} href={href(tab.route)}>
+            <span className="tabbar__icon">{tab.icon}</span>
+            <span>{tab.label}</span>
+            {tab.studio && catalog?.ai && <span className="tabbar__dot" />}
           </a>
         ))}
       </nav>

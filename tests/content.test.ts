@@ -17,6 +17,15 @@ describe("built-in library", () => {
     }
   });
 
+  it("ships every category in every app language", () => {
+    for (const language of ["en", "he", "fr"]) {
+      for (const category of CATEGORIES) {
+        const found = BUILTIN_SERIES.some((s) => s.language === language && s.category === category.id);
+        expect(found, `${language}: ${category.id}`).toBe(true);
+      }
+    }
+  });
+
   for (const series of BUILTIN_SERIES) {
     describe(series.title, () => {
       it("matches the stored-series schema", () => {

@@ -6,6 +6,7 @@ import { fontsReady } from "../engine/render";
 import { setSfxEnabled } from "../engine/sfx";
 import { haptic } from "../lib/native";
 import { useStore } from "../lib/store";
+import { useT } from "../i18n";
 
 interface Props {
   series: Series;
@@ -20,6 +21,7 @@ interface Props {
 /** A kid-sized video player for script-rendered episodes. */
 export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnded, onWatched }: Props) {
   const { settings, updateSettings } = useStore();
+  const t = useT();
   const shellRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const playerRef = useRef<EpisodePlayer | null>(null);
@@ -174,7 +176,7 @@ export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnde
       <div className="player__stage">
         <canvas ref={canvasRef} className="player__canvas" onClick={onCanvasTap} />
         {!playing && !blocked && (
-          <button className="player__big-play" onClick={toggle} aria-label={view.status === "ended" ? "Watch again" : "Play"}>
+          <button className="player__big-play" onClick={toggle} aria-label={view.status === "ended" ? t.watchAgain : t.play}>
             {view.status === "ended" ? "↻" : "▶"}
           </button>
         )}
@@ -191,13 +193,13 @@ export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnde
         </div>
       )}
       <div className="player__controls">
-        <button className="pbtn" onClick={() => playerRef.current?.skip(-1)} aria-label="Previous scene">
+        <button className="pbtn" onClick={() => playerRef.current?.skip(-1)} aria-label={t.prevScene}>
           ⏮
         </button>
-        <button className="pbtn pbtn--main" onClick={toggle} aria-label={playing ? "Pause" : "Play"}>
+        <button className="pbtn pbtn--main" onClick={toggle} aria-label={playing ? t.pause : t.play}>
           {playing ? "❚❚" : "▶"}
         </button>
-        <button className="pbtn" onClick={() => playerRef.current?.skip(1)} aria-label="Next scene">
+        <button className="pbtn" onClick={() => playerRef.current?.skip(1)} aria-label={t.nextScene}>
           ⏭
         </button>
         <div className="scrubber">
@@ -213,7 +215,7 @@ export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnde
             max={view.duration || 1}
             step={0.1}
             value={view.t}
-            aria-label="Seek"
+            aria-label={t.seek}
             onChange={(e) => playerRef.current?.seek(Number(e.target.value))}
           />
         </div>
@@ -223,28 +225,28 @@ export function VideoPlayer({ series, episode, colors, autoPlay, blocked, onEnde
         <button
           className={`pbtn pbtn--toggle ${settings.captions ? "is-on" : ""}`}
           onClick={() => updateSettings({ captions: !settings.captions })}
-          aria-label="Words on screen"
-          title="Words on screen"
+          aria-label={t.wordsOnScreen}
+          title={t.wordsOnScreen}
         >
           CC
         </button>
         <button
           className={`pbtn pbtn--toggle ${settings.narration ? "is-on" : ""}`}
           onClick={() => updateSettings({ narration: !settings.narration })}
-          aria-label="Voices"
-          title="Voices"
+          aria-label={t.voices}
+          title={t.voices}
         >
           🗣️
         </button>
         <button
           className={`pbtn pbtn--toggle ${settings.music ? "is-on" : ""}`}
           onClick={() => updateSettings({ music: !settings.music })}
-          aria-label="Music"
-          title="Music"
+          aria-label={t.music}
+          title={t.music}
         >
           🎵
         </button>
-        <button className="pbtn" onClick={toggleTheater} aria-label="Big screen" title="Big screen">
+        <button className="pbtn" onClick={toggleTheater} aria-label={t.bigScreen} title={t.bigScreen}>
           ⛶
         </button>
       </div>

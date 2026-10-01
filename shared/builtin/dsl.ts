@@ -83,10 +83,12 @@ export function series(def: {
   emoji: string;
   cast: CastMember[];
   episodes: EpisodeDraft[];
+  /** Defaults to English; set for series written natively in another language. */
+  language?: string;
 }): Series {
   return {
     ...def,
-    language: "en",
+    language: def.language ?? "en",
     source: "built-in",
     episodes: def.episodes.map((episode, i) => ({ number: i + 1, ...episode })),
   };

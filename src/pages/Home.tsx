@@ -1,4 +1,5 @@
 import { AGE_PROFILES, CATEGORIES } from "../../shared/categories";
+import { localCategory } from "../../shared/categoryText";
 import { AGE_GROUPS, type SeriesSummary } from "../../shared/types";
 import { Loading, Row, SeriesCard, categoryColors } from "../components/Bits";
 import { LivePreview } from "../components/Thumbs";
@@ -6,6 +7,7 @@ import { useCatalog } from "../lib/catalog";
 import { haptic } from "../lib/native";
 import { href } from "../lib/router";
 import { useStore, type Settings } from "../lib/store";
+import { useT } from "../i18n";
 
 function dayIndex(length: number) {
   const day = Math.floor(Date.now() / 86_400_000);
@@ -14,12 +16,13 @@ function dayIndex(length: number) {
 
 export function AgePicker() {
   const { settings, updateSettings } = useStore();
+  const t = useT();
   const options: Array<{ value: Settings["age"]; label: string }> = [
-    { value: "all", label: "🌈 Everyone" },
+    { value: "all", label: `🌈 ${t.everyone}` },
     ...AGE_GROUPS.map((age) => ({ value: age, label: `${AGE_PROFILES[age].emoji} ${age.replace("-", "–")}` })),
   ];
   return (
-    <div className="chips" role="radiogroup" aria-label="Age">
+    <div className="chips" role="radiogroup" aria-label={t.whosWatching}>
       {options.map((o) => (
         <button
           key={o.value}
@@ -39,19 +42,20 @@ export function AgePicker() {
 }
 
 function Hero({ series, episode, resume }: { series: SeriesSummary; episode: number; resume: boolean }) {
+  const t = useT();
   const colors = categoryColors(series.category);
   return (
     <section className="hero" style={{ background: `linear-gradient(135deg, ${colors[0]}, ${colors[1]})` }}>
-      <a className="hero__screen" href={href({ name: "watch", id: series.id, episode })} aria-label={`Watch ${series.title}`}>
+      <a className="hero__screen" href={href({ name: "watch", id: series.id, episode })} aria-label={series.title}>
         <LivePreview cast={series.cast} scene={series.preview} colors={colors} className="hero__canvas" />
         <span className="hero__play">▶</span>
       </a>
       <div className="hero__info">
-        <span className="hero__kicker">{resume ? "Keep watching" : "Today's pick"}</span>
-        <h1>
+        <span className="hero__kicker">{resume ? t.keepWatching : t.todaysPick}</span>
+        <h1 dir="auto">
           {series.emoji} {series.title}
         </h1>
-        <p>{series.tagline}</p>
+        <p dir="auto">{series.tagline}</p>
         <div className="hero__cast" aria-hidden="true">
           {series.cast.slice(0, 5).map((c) => (
             <span key={c.id} title={c.name}>
@@ -60,7 +64,7 @@ function Hero({ series, episode, resume }: { series: SeriesSummary; episode: num
           ))}
         </div>
         <a className="btn btn--white btn--big" href={href({ name: "watch", id: series.id, episode })}>
-          ▶ {resume ? `Episode ${episode}` : "Watch now"}
+          ▶ {resume ? t.episodeN(episode) : t.watchNow}
         </a>
       </div>
     </section>
@@ -70,12 +74,14 @@ function Hero({ series, episode, resume }: { series: SeriesSummary; episode: num
 export function Home() {
   const catalog = useCatalog();
   const { settings, progress } = useStore();
-  if (!catalog) return <Loading label="Opening the WonderWhirl…" />;
+  const t = useT();
+  if (!catalog) return <Loading label={t.loadingApp} />;
 
-  const visible = catalog.series.filter((s) => settings.age === "all" || s.age === settings.age);
-  const last = progress.last && catalog.series.find((s) => s.id === progress.last!.seriesId);
+  const inLanguage = catalog.series.filter((s) => s.language === settings.language);
+  const visible = inLanguage.filter((s) => settings.age === "all" || s.age === settings.age);
+  const last = progress.last && inLanguage.find((s) => s.id === progress.last!.seriesId);
   const resumeEpisode = last ? Math.min(last.episodes.length, progress.last!.episode) : 1;
-  const featured = last ?? visible[dayIndex(visible.length)] ?? catalog.series[0];
+  const featured = last ?? visible[dayIndex(visible.length)] ?? inLanguage[0];
 
   return (
     <main className="page home">
@@ -83,17 +89,17 @@ export function Home() {
 
       <section className="section">
         <div className="section__head">
-          <h2>Who's watching?</h2>
+          <h2>{t.whosWatching}</h2>
         </div>
         <AgePicker />
       </section>
 
       <section className="section">
         <div className="section__head">
-          <h2>Pick a world</h2>
+          <h2>{t.pickWorld}</h2>
         </div>
         <div className="worlds">
-          {CATEGORIES.map((c, i) => (
+          {CATEGORIES.map((c) => localCategory(c, settings.language)).map((c, i) => (
             <a
               key={c.id}
               className="world"
@@ -112,15 +118,15 @@ export function Home() {
         <a className="studio-banner" href={href({ name: "studio" })}>
           <span className="studio-banner__wand">🪄</span>
           <span>
-            <strong>Magic Studio</strong>
+            <strong>{t.studioBannerTitle}</strong>
             <br />
-            Make a brand-new cartoon about anything!
+            {t.studioBannerText}
           </span>
           <span className="studio-banner__go">✨</span>
         </a>
       )}
 
-      {CATEGORIES.map((c) => {
+      {CATEGORIES.map((c) => localCategory(c, settings.language)).map((c) => {
         const list = visible.filter((s) => s.category === c.id);
         if (list.length === 0) return null;
         return (
@@ -129,7 +135,7 @@ export function Home() {
               <h2>
                 {c.emoji} {c.name}
               </h2>
-              <a href={href({ name: "category", id: c.id })}>See all ›</a>
+              <a href={href({ name: "category", id: c.id })}>{t.seeAll}</a>
             </div>
             <Row>
               {list.map((s) => (
@@ -141,10 +147,10 @@ export function Home() {
       })}
 
       {visible.length === 0 && (
-        <p className="muted center">No shows for this age yet. Try “Everyone”{catalog.ai ? " or make one in the Magic Studio" : ""}!</p>
+        <p className="muted center">{t.noShowsForAge}</p>
       )}
       {catalog.offline && (
-        <p className="muted center small">Offline mode: showing the built-in shows. The Magic Studio needs the WonderWhirl server.</p>
+        <p className="muted center small">{t.offlineNote}</p>
       )}
     </main>
   );

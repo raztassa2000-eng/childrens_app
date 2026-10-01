@@ -1,5 +1,6 @@
-import { CATEGORY_BY_ID } from "../../shared/categories";
+import { localCategoryById } from "../../shared/categoryText";
 import { EmptyState, Loading, SeriesCard } from "../components/Bits";
+import { useT } from "../i18n";
 import { useCatalog } from "../lib/catalog";
 import { href } from "../lib/router";
 import { useStore } from "../lib/store";
@@ -8,11 +9,12 @@ import { AgePicker } from "./Home";
 export function CategoryPage({ id }: { id: string }) {
   const catalog = useCatalog();
   const { settings } = useStore();
-  const category = CATEGORY_BY_ID[id];
-  if (!category) return <EmptyState emoji="🧭" title="That world doesn't exist yet" />;
+  const t = useT();
+  const category = localCategoryById(id, settings.language);
+  if (!category) return <EmptyState emoji="🧭" title={t.noWorld} />;
   if (!catalog) return <Loading />;
 
-  const all = catalog.series.filter((s) => s.category === id);
+  const all = catalog.series.filter((s) => s.category === id && s.language === settings.language);
   const shows = all.filter((s) => settings.age === "all" || s.age === settings.age);
 
   return (
@@ -34,22 +36,22 @@ export function CategoryPage({ id }: { id: string }) {
         {catalog.ai && (
           <a className="make-card" href={href({ name: "studio", category: id })}>
             <span className="make-card__icon">🪄</span>
-            <strong>Make a new {category.name} show</strong>
-            <span className="muted">The AI writes and animates it for you</span>
+            <strong>{t.makeShowIn(category.name)}</strong>
+            <span className="muted">{t.makeShowHint}</span>
           </a>
         )}
       </div>
 
       {shows.length === 0 && (
         <p className="muted center">
-          {all.length > 0 ? "No shows for this age here yet — try “Everyone”." : "No shows here yet."}
-          {catalog.ai ? " Make one in the Magic Studio!" : ""}
+          {all.length > 0 ? t.noShowsHereAge : t.noShowsHere}
+          {catalog.ai ? t.makeOneInStudio : ""}
         </p>
       )}
 
       <section className="section">
         <div className="section__head">
-          <h2>Ideas to explore</h2>
+          <h2>{t.ideasToExplore}</h2>
         </div>
         <div className="chips chips--wrap">
           {category.topics.map((topic) =>

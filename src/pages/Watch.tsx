@@ -9,6 +9,7 @@ import { useCatalog, useSeries } from "../lib/catalog";
 import { haptic } from "../lib/native";
 import { go, href } from "../lib/router";
 import { useStore } from "../lib/store";
+import { useT } from "../i18n";
 
 type Phase = "watch" | "quiz" | "done";
 
@@ -21,6 +22,7 @@ export function Watch({ id, episode: number }: { id: string; episode: number }) 
   const [countdown, setCountdown] = useState<number | null>(null);
   const [gate, setGate] = useState(false);
   const pendingSeconds = useRef(0);
+  const t = useT();
 
   useEffect(() => {
     setPhase("watch");
@@ -61,9 +63,9 @@ export function Watch({ id, episode: number }: { id: string; episode: number }) 
     if (countdown === 0 && series) go({ name: "watch", id: series.id, episode: number + 1 });
   }, [countdown, series, number]);
 
-  if (error) return <EmptyState emoji="🙈" title="We couldn't find that show" />;
+  if (error) return <EmptyState emoji="🙈" title={t.showNotFound} />;
   if (!series) return <Loading />;
-  if (!episode) return <EmptyState emoji="🔍" title="That episode isn't here" />;
+  if (!episode) return <EmptyState emoji="🔍" title={t.episodeNotFound} />;
 
   const colors = categoryColors(series.category);
   const timeUp = minutesLeft !== null && minutesLeft <= 0;
@@ -106,24 +108,25 @@ export function Watch({ id, episode: number }: { id: string; episode: number }) 
               <Confetti />
               <div className="finish">
                 <div className="finish__stars">{earned > 0 ? "⭐".repeat(earned) : "🎉"}</div>
-                <h2>{earned > 0 ? `You earned ${earned} star${earned === 1 ? "" : "s"}!` : "Great watching!"}</h2>
+                <h2>{earned > 0 ? t.earnedStars(earned) : t.greatWatching}</h2>
                 <p dir="auto">{episode.takeaway}</p>
                 <div className="finish__actions">
                   {hasNext ? (
                     <a className="btn btn--primary btn--big" href={href({ name: "watch", id: series.id, episode: number + 1 })}>
-                      ▶ Next episode{countdown !== null && countdown > 0 ? ` (${countdown})` : ""}
+                      {t.nextEpisode}
+                      {countdown !== null && countdown > 0 ? ` (${countdown})` : ""}
                     </a>
                   ) : catalog?.ai ? (
                     <a className="btn btn--primary btn--big" href={href({ name: "studio", series: series.id })}>
-                      🪄 Make the next episode
+                      {t.makeNextEpisode}
                     </a>
                   ) : (
                     <a className="btn btn--primary btn--big" href={href({ name: "category", id: series.category })}>
-                      More shows ›
+                      {t.moreShows}
                     </a>
                   )}
                   <button className="btn btn--ghost" onClick={() => { setCountdown(null); setPhase("watch"); }}>
-                    ↻ Watch again
+                    {t.watchAgain}
                   </button>
                 </div>
               </div>
@@ -134,7 +137,7 @@ export function Watch({ id, episode: number }: { id: string; episode: number }) 
             <div className="overlay overlay--night">
               {gate ? (
                 <ParentGate
-                  title="Add 15 more minutes?"
+                  title={t.addMinutes}
                   onPass={() => {
                     grantBonus(15);
                     setGate(false);
@@ -144,14 +147,14 @@ export function Watch({ id, episode: number }: { id: string; episode: number }) 
               ) : (
                 <div className="finish">
                   <div className="finish__stars">🌙</div>
-                  <h2>Time for a break!</h2>
-                  <p>You watched a lot today. Let's rest our eyes, stretch and play!</p>
+                  <h2>{t.breakTitle}</h2>
+                  <p>{t.breakText}</p>
                   <div className="finish__actions">
                     <a className="btn btn--primary btn--big" href="#/">
-                      OK!
+                      {t.ok}
                     </a>
                     <button className="btn btn--ghost" onClick={() => setGate(true)}>
-                      Grown-up: more time
+                      {t.moreTime}
                     </button>
                   </div>
                 </div>
@@ -161,7 +164,7 @@ export function Watch({ id, episode: number }: { id: string; episode: number }) 
         </div>
 
         <aside className="watch__side">
-          <a className="crumb" href={href({ name: "series", id: series.id })}>
+          <a className="crumb" href={href({ name: "series", id: series.id })} dir="auto">
             {series.emoji} {series.title}
           </a>
           <h1 dir="auto">
@@ -170,7 +173,7 @@ export function Watch({ id, episode: number }: { id: string; episode: number }) 
           <p className="muted" dir="auto">
             {episode.summary}
           </p>
-          <h2 className="watch__upnext">Episodes</h2>
+          <h2 className="watch__upnext">{t.episodes}</h2>
           <ol className="mini-episodes">
             {series.episodes.map((e) => (
               <li key={e.number}>

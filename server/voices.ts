@@ -17,6 +17,9 @@ export const DEFAULT_TTS_MODEL = "gemini-3.8-flash-tts";
 /** Tried in order when a model name isn't available to this API key. */
 const FALLBACK_MODELS = ["gemini-2.5-flash-preview-tts"];
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
+/** Vertex AI (Google Cloud) serves the same Gemini voices with an "auth key" (AQ.…), under Cloud limits. */
+const VERTEX_ENDPOINT = "https://aiplatform.googleapis.com/v1/publishers/google/models";
+const VERTEX_FALLBACK_MODELS = ["gemini-2.5-flash-tts", "gemini-2.5-flash-preview-tts"];
 /** Loudness samples per second in the envelope. */
 export const ENVELOPE_RATE = 20;
 
@@ -134,9 +137,13 @@ export function createGeminiRenderer(options: {
   fetch?: typeof fetch;
   /** Stay under the key's per-minute limit (Google's free plan allows 10). */
   requestsPerMinute?: number;
+  /** Call Vertex AI instead of the Gemini API (AI Studio). */
+  vertex?: boolean;
 }): VoiceRenderer {
   const doFetch = options.fetch ?? fetch;
-  const models = [options.model ?? DEFAULT_TTS_MODEL, ...FALLBACK_MODELS].filter((m, i, all) => all.indexOf(m) === i);
+  const endpoint = options.vertex ? VERTEX_ENDPOINT : ENDPOINT;
+  const fallbacks = options.vertex ? VERTEX_FALLBACK_MODELS : FALLBACK_MODELS;
+  const models = [options.model ?? DEFAULT_TTS_MODEL, ...fallbacks].filter((m, i, all) => all.indexOf(m) === i);
   let modelIndex = 0;
   const interval = 60_000 / Math.max(1, options.requestsPerMinute ?? 10);
   let nextSlot = 0;
@@ -151,11 +158,11 @@ export function createGeminiRenderer(options: {
   };
 
   const call = async (model: string, text: string, voice: string) => {
-    const res = await doFetch(`${ENDPOINT}/${encodeURIComponent(model)}:generateContent`, {
+    const res = await doFetch(`${endpoint}/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": options.apiKey },
       body: JSON.stringify({
-        contents: [{ parts: [{ text }] }],
+        contents: [{ role: "user", parts: [{ text }] }],
         generationConfig: {
           responseModalities: ["AUDIO"],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
@@ -177,7 +184,7 @@ export function createGeminiRenderer(options: {
   };
 
   return {
-    engine: "gemini",
+    engine: options.vertex ? "vertex-gemini" : "gemini",
     async synthesize({ prompt: text, voice }) {
       for (let attempt = 0; ; attempt++) {
         if (dailyLimitHit) throw new GeminiError("Google's daily voice limit for this key is used up. Run again tomorrow, or turn on billing in Google AI Studio.", 429);
@@ -279,7 +286,8 @@ export const DEFAULT_CLOUD_GEMINI_MODEL = "gemini-2.5-flash-tts";
  * Picks the voice engine from the environment:
  *   VOICE_ENGINE=gemini        Gemini TTS through AI Studio (default)
  *   VOICE_ENGINE=cloud         Google Cloud Chirp 3 HD
- *   VOICE_ENGINE=cloud-gemini  Gemini TTS through Google Cloud (acting directions, Cloud limits)
+ *   VOICE_ENGINE=cloud-gemini  Gemini TTS through Cloud Text-to-Speech (needs OAuth, not API keys)
+ *   VOICE_ENGINE=vertex        Gemini TTS through Vertex AI with the Gemini "auth key" (AQ.…)
  * and per language, e.g. VOICE_ENGINE_HE=cloud-gemini.
  */
 export function rendererFromEnv(env: NodeJS.ProcessEnv): { renderer: VoiceRenderer; label: string } | null {
@@ -295,6 +303,12 @@ export function rendererFromEnv(env: NodeJS.ProcessEnv): { renderer: VoiceRender
     } else if (kind === "cloud-gemini" && cloudKey) {
       const model = env.GOOGLE_GEMINI_TTS_MODEL || DEFAULT_CLOUD_GEMINI_MODEL;
       out = { renderer: createCloudRenderer({ apiKey: cloudKey, requestsPerMinute: cloudRpm, model }), label: `Google Cloud ${model}` };
+    } else if (kind === "vertex" && key) {
+      const model = env.VERTEX_TTS_MODEL || DEFAULT_TTS_MODEL;
+      out = {
+        renderer: createGeminiRenderer({ apiKey: key, model, vertex: true, requestsPerMinute: Number(env.VERTEX_TTS_RPM ?? 60) }),
+        label: `Vertex AI ${model}`,
+      };
     } else if (kind === "gemini" && key) {
       const model = env.GEMINI_TTS_MODEL || DEFAULT_TTS_MODEL;
       out = { renderer: createGeminiRenderer({ apiKey: key, model, requestsPerMinute: Number(env.GEMINI_TTS_RPM ?? 10) }), label: model };

@@ -245,3 +245,20 @@ describe("Gemini voices through Google Cloud", () => {
     expect(picked!.renderer.engineFor!("fr")).toBe("cloud-chirp3");
   });
 });
+
+describe("Gemini voices through Vertex AI", () => {
+  it("calls the Vertex endpoint and falls back to a model Vertex has", async () => {
+    const urls: string[] = [];
+    const pcm = Buffer.alloc(480 * 2).toString("base64");
+    const fakeFetch = (async (url: string) => {
+      urls.push(url);
+      if (urls.length === 1) return new Response(JSON.stringify({ error: { message: "Publisher Model `x` was not found" } }), { status: 404 });
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;rate=24000", data: pcm } }] } }] }));
+    }) as unknown as typeof fetch;
+    const renderer = createGeminiRenderer({ apiKey: "AQ.test", vertex: true, fetch: fakeFetch, requestsPerMinute: 6000 });
+    expect(renderer.engine).toBe("vertex-gemini");
+    await renderer.synthesize({ prompt: "Say: שלום", text: "שלום", direction: "", voice: "Leda", language: "he" });
+    expect(urls[0]).toContain("aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.8-flash-tts:generateContent");
+    expect(urls[1]).toContain("/gemini-2.5-flash-tts:generateContent");
+  });
+});

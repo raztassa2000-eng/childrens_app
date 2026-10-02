@@ -9,6 +9,7 @@ import {
   VoiceStudio,
   castVoices,
   createCloudRenderer,
+  rendererFromEnv,
   createGeminiRenderer,
   envelope,
   episodeLines,
@@ -90,7 +91,7 @@ describe("voice helpers", () => {
       );
     }) as unknown as typeof fetch;
     const renderer = createGeminiRenderer({ apiKey: "test", model: "nope", fetch: fakeFetch, requestsPerMinute: 6000 });
-    const out = await renderer.synthesize({ prompt: "Say hi: hi", text: "hi", voice: "Puck", language: "en" });
+    const out = await renderer.synthesize({ prompt: "Say hi: hi", text: "hi", direction: "", voice: "Puck", language: "en" });
     expect(out.sampleRate).toBe(24000);
     expect(out.pcm.length).toBe(4800);
     expect(requests[0].url).toContain("/nope:generateContent");
@@ -186,7 +187,7 @@ describe("Gemini rate limits", () => {
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;rate=24000", data: pcm } }] } }] }));
     }) as unknown as typeof fetch;
     const renderer = createGeminiRenderer({ apiKey: "test", fetch: fakeFetch, requestsPerMinute: 6000 });
-    const out = await renderer.synthesize({ prompt: "hi", text: "hi", voice: "Puck", language: "en" });
+    const out = await renderer.synthesize({ prompt: "hi", text: "hi", direction: "", voice: "Puck", language: "en" });
     expect(out.pcm.length).toBe(480);
     expect(calls).toBe(2);
   });
@@ -198,8 +199,8 @@ describe("Gemini rate limits", () => {
       return new Response(JSON.stringify({ error: { message: "Quota exceeded for metric: generate_requests_per_model_per_day" } }), { status: 429 });
     }) as unknown as typeof fetch;
     const renderer = createGeminiRenderer({ apiKey: "test", fetch: fakeFetch, requestsPerMinute: 6000 });
-    await expect(renderer.synthesize({ prompt: "a", text: "a", voice: "Puck", language: "en" })).rejects.toThrow();
-    await expect(renderer.synthesize({ prompt: "b", text: "b", voice: "Puck", language: "en" })).rejects.toThrow(/daily/);
+    await expect(renderer.synthesize({ prompt: "a", text: "a", direction: "", voice: "Puck", language: "en" })).rejects.toThrow();
+    await expect(renderer.synthesize({ prompt: "b", text: "b", direction: "", voice: "Puck", language: "en" })).rejects.toThrow(/daily/);
     expect(calls).toBe(1);
   });
 });
@@ -214,11 +215,33 @@ describe("Cloud Chirp 3 HD voices", () => {
       return new Response(JSON.stringify({ audioContent: file.toString("base64") }));
     }) as unknown as typeof fetch;
     const renderer = createCloudRenderer({ apiKey: "test", fetch: fakeFetch, requestsPerMinute: 6000 });
-    const out = await renderer.synthesize({ prompt: "Say warmly: שלום", text: "שלום", voice: "Sulafat", language: "he" });
+    const out = await renderer.synthesize({ prompt: "Say warmly: שלום", text: "שלום", direction: "Say warmly", voice: "Sulafat", language: "he" });
     expect(sent!.voice).toEqual({ languageCode: "he-IL", name: "he-IL-Chirp3-HD-Sulafat" });
     expect(sent!.input.text).toBe("שלום");
     expect(out.sampleRate).toBe(24000);
     expect(out.pcm.length).toBe(pcm.length);
     expect(out.pcm[pcm.length >> 1]).toBe(pcm[pcm.length >> 1]);
+  });
+});
+
+describe("Gemini voices through Google Cloud", () => {
+  it("sends the model, the voice and the acting direction separately", async () => {
+    const file = wav(tone(0.2), 24000);
+    let sent: { voice: unknown; input: unknown } | null = null;
+    const fakeFetch = (async (_url: string, init: RequestInit) => {
+      sent = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({ audioContent: file.toString("base64") }));
+    }) as unknown as typeof fetch;
+    const renderer = createCloudRenderer({ apiKey: "t", fetch: fakeFetch, requestsPerMinute: 6000, model: "gemini-2.5-flash-tts" });
+    expect(renderer.engine).toBe("cloud-gemini-2.5-flash-tts");
+    await renderer.synthesize({ prompt: "", text: "שלום", direction: "Say this softly, in Hebrew", voice: "Leda", language: "he" });
+    expect(sent!.voice).toEqual({ languageCode: "he-IL", name: "Leda", modelName: "gemini-2.5-flash-tts" });
+    expect(sent!.input).toEqual({ text: "שלום", prompt: "Say this softly, in Hebrew" });
+  });
+
+  it("routes each language to its own engine", () => {
+    const picked = rendererFromEnv({ GOOGLE_TTS_API_KEY: "k", VOICE_ENGINE: "cloud", VOICE_ENGINE_HE: "cloud-gemini" });
+    expect(picked!.renderer.engineFor!("he")).toBe("cloud-gemini-2.5-flash-tts");
+    expect(picked!.renderer.engineFor!("fr")).toBe("cloud-chirp3");
   });
 });

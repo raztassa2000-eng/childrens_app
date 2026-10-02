@@ -35,9 +35,7 @@ const shows = library
 const lines = shows.flatMap((series) => series.episodes.flatMap((episode) => episodeLines(series, episode)));
 console.log(`${shows.length} shows, ${lines.length} lines to voice.`);
 const engine = rendererFromEnv(process.env);
-const cloud = process.env.VOICE_ENGINE === "cloud";
-const rpm = cloud ? Number(process.env.GOOGLE_TTS_RPM ?? 150) : Number(process.env.GEMINI_TTS_RPM ?? 10);
-console.log(`Voices: ${engine?.label ?? "none"}, pacing to ${rpm} lines a minute. Lines already recorded are skipped.`);
+console.log(`Voices: ${engine?.label ?? "none"}. Lines already recorded are skipped.`);
 if (args["dry-run"]) process.exit(0);
 
 if (!engine) {

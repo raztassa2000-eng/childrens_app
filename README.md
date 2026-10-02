@@ -88,7 +88,7 @@ The iOS build plays sound even with the silent switch on (like other video apps)
 | `GEMINI_API_KEY` | | Turns on natural voices (`GOOGLE_API_KEY` also works) |
 | `GEMINI_TTS_MODEL` | `gemini-3.8-flash-tts` | Gemini text-to-speech model. Falls back to `gemini-2.5-flash-preview-tts` if your key can't use it |
 | `AUDIO_DIR` | `data/audio` | Where rendered voice clips are cached |
-| `VOICE_ENGINE` | `gemini` | `cloud` uses Google Cloud Text-to-Speech Chirp 3 HD voices instead (same voice names, 200 requests a minute, 1M free characters a month). Enable "Cloud Text-to-Speech API" on the key's Google Cloud project |
+| `VOICE_ENGINE` | `gemini` | `gemini` (AI Studio), `cloud` (Google Cloud Chirp 3 HD: 200 requests a minute) or `cloud-gemini` (Gemini voices with acting directions, through Google Cloud). Override per language with e.g. `VOICE_ENGINE_HE=cloud-gemini`. The Cloud engines need "Cloud Text-to-Speech API" enabled and `GOOGLE_TTS_API_KEY` |
 
 - Scripts come back as **structured JSON** (`output_config.format`), validated with Zod and then repaired by `shared/normalize.ts`. That step clamps lengths, resolves character names, drops unknown or blocked emoji, and fixes quiz answers, so a slightly-off answer is repaired instead of failing.
 - Live requests use **server-side refusal fallbacks** (`fallbacks: "default"`), so a request a safety classifier declines is retried on Anthropic's recommended fallback model instead of failing.

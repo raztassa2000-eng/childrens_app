@@ -93,6 +93,8 @@ export interface SpeechRequest {
   prompt: string;
   /** Just the words. */
   text: string;
+  /** Just the acting direction ("Say this softly…"), for engines that take it separately. */
+  direction: string;
   voice: string;
   language: string;
 }
@@ -100,6 +102,8 @@ export interface SpeechRequest {
 export interface VoiceRenderer {
   /** Cache namespace: clips from different engines sound different, so they never mix. */
   readonly engine: string;
+  /** When different languages use different engines. */
+  engineFor?(language: string): string;
   /** Returns 16-bit mono PCM samples and their sample rate. */
   synthesize(request: SpeechRequest): Promise<{ pcm: Int16Array; sampleRate: number }>;
 }
@@ -213,14 +217,20 @@ const CLOUD_LOCALES: Record<string, string> = { he: "he-IL", en: "en-US", fr: "f
  * as Gemini TTS, with far higher limits (200 requests a minute, no small daily
  * cap). It doesn't take acting directions, so styles come from the voice choice.
  */
-export function createCloudRenderer(options: { apiKey: string; fetch?: typeof fetch; requestsPerMinute?: number }): VoiceRenderer {
+export function createCloudRenderer(options: {
+  apiKey: string;
+  fetch?: typeof fetch;
+  requestsPerMinute?: number;
+  /** A Gemini-TTS model (e.g. "gemini-2.5-flash-tts") instead of Chirp 3 HD: performs acting directions. */
+  model?: string;
+}): VoiceRenderer {
   const doFetch = options.fetch ?? fetch;
   const interval = 60_000 / Math.max(1, options.requestsPerMinute ?? 150);
   let nextSlot = 0;
   let authError: string | null = null;
   return {
-    engine: "cloud-chirp3",
-    async synthesize({ text, voice, language }) {
+    engine: options.model ? `cloud-${options.model}` : "cloud-chirp3",
+    async synthesize({ text, voice, language, direction }) {
       const locale = CLOUD_LOCALES[language] ?? "en-US";
       // A rejected key won't start working mid-run: stop asking after the first refusal.
       if (authError) throw new GeminiError(authError, 401);
@@ -233,8 +243,10 @@ export function createCloudRenderer(options: { apiKey: string; fetch?: typeof fe
           method: "POST",
           headers: { "Content-Type": "application/json", "x-goog-api-key": options.apiKey },
           body: JSON.stringify({
-            input: { text },
-            voice: { languageCode: locale, name: `${locale}-Chirp3-HD-${voice}` },
+            input: options.model ? { text, prompt: direction } : { text },
+            voice: options.model
+              ? { languageCode: locale, name: voice, modelName: options.model }
+              : { languageCode: locale, name: `${locale}-Chirp3-HD-${voice}` },
             audioConfig: { audioEncoding: "LINEAR16", sampleRateHertz: 24000 },
           }),
         });
@@ -260,19 +272,57 @@ export function createCloudRenderer(options: { apiKey: string; fetch?: typeof fe
   };
 }
 
-/** Picks the voice engine from the environment (VOICE_ENGINE=cloud or gemini). */
+export const DEFAULT_CLOUD_GEMINI_MODEL = "gemini-2.5-flash-tts";
+
+/**
+ * Picks the voice engine from the environment:
+ *   VOICE_ENGINE=gemini        Gemini TTS through AI Studio (default)
+ *   VOICE_ENGINE=cloud         Google Cloud Chirp 3 HD
+ *   VOICE_ENGINE=cloud-gemini  Gemini TTS through Google Cloud (acting directions, Cloud limits)
+ * and per language, e.g. VOICE_ENGINE_HE=cloud-gemini.
+ */
 export function rendererFromEnv(env: NodeJS.ProcessEnv): { renderer: VoiceRenderer; label: string } | null {
   const key = env.GEMINI_API_KEY || env.GOOGLE_API_KEY;
-  if (env.VOICE_ENGINE === "cloud") {
-    const cloudKey = env.GOOGLE_TTS_API_KEY || key;
-    if (!cloudKey) return null;
-    return { renderer: createCloudRenderer({ apiKey: cloudKey, requestsPerMinute: Number(env.GOOGLE_TTS_RPM ?? 150) }), label: "Google Cloud Chirp 3 HD" };
-  }
-  if (!key) return null;
-  const model = env.GEMINI_TTS_MODEL || DEFAULT_TTS_MODEL;
+  const cloudKey = env.GOOGLE_TTS_API_KEY || key;
+  const cloudRpm = Number(env.GOOGLE_TTS_RPM ?? 150);
+  const made = new Map<string, { renderer: VoiceRenderer; label: string } | null>();
+  const build = (kind: string) => {
+    if (made.has(kind)) return made.get(kind)!;
+    let out: { renderer: VoiceRenderer; label: string } | null = null;
+    if (kind === "cloud" && cloudKey) {
+      out = { renderer: createCloudRenderer({ apiKey: cloudKey, requestsPerMinute: cloudRpm }), label: "Google Cloud Chirp 3 HD" };
+    } else if (kind === "cloud-gemini" && cloudKey) {
+      const model = env.GOOGLE_GEMINI_TTS_MODEL || DEFAULT_CLOUD_GEMINI_MODEL;
+      out = { renderer: createCloudRenderer({ apiKey: cloudKey, requestsPerMinute: cloudRpm, model }), label: `Google Cloud ${model}` };
+    } else if (kind === "gemini" && key) {
+      const model = env.GEMINI_TTS_MODEL || DEFAULT_TTS_MODEL;
+      out = { renderer: createGeminiRenderer({ apiKey: key, model, requestsPerMinute: Number(env.GEMINI_TTS_RPM ?? 10) }), label: model };
+    }
+    made.set(kind, out);
+    return out;
+  };
+
+  const fallback = build(env.VOICE_ENGINE || "gemini");
+  const overrides = Object.entries(env)
+    .filter(([name, value]) => /^VOICE_ENGINE_[A-Z]{2}$/.test(name) && value)
+    .map(([name, value]) => [name.slice(-2).toLowerCase(), build(value!)] as const)
+    .filter((entry): entry is readonly [string, { renderer: VoiceRenderer; label: string }] => entry[1] !== null);
+  if (!overrides.length) return fallback;
+
+  const byLanguage = new Map(overrides);
+  const pick = (language: string) => (byLanguage.get(language) ?? fallback)?.renderer;
+  const labels = [...overrides.map(([lang, r]) => `${lang}: ${r.label}`), ...(fallback ? [`others: ${fallback.label}`] : [])];
   return {
-    renderer: createGeminiRenderer({ apiKey: key, model, requestsPerMinute: Number(env.GEMINI_TTS_RPM ?? 10) }),
-    label: model,
+    label: labels.join(", "),
+    renderer: {
+      engine: fallback?.renderer.engine ?? "none",
+      engineFor: (language) => pick(language)?.engine ?? "none",
+      synthesize(request) {
+        const renderer = pick(request.language);
+        if (!renderer) return Promise.reject(new Error(`No voice engine for ${request.language}`));
+        return renderer.synthesize(request);
+      },
+    },
   };
 }
 
@@ -350,11 +400,15 @@ export class VoiceStudio {
     return createHash("sha1").update(`${prefix}|${line.casting.voice}|${prompt(line)}`).digest("hex");
   }
 
+  private engineOf(language: string) {
+    return this.renderer.engineFor?.(language) ?? this.renderer.engine;
+  }
+
   /** What's ready now; starts rendering the rest in the background (in story order). */
   async pack(lines: VoiceLine[]): Promise<PackStatus> {
     const out: PackStatus = { lines: {}, pending: 0, failed: 0 };
     for (const line of lines) {
-      const id = VoiceStudio.id(line, this.renderer.engine);
+      const id = VoiceStudio.id(line, this.engineOf(line.language));
       const clip = await this.cached(id);
       if (clip) {
         out.lines[line.key] = clip;
@@ -373,7 +427,7 @@ export class VoiceStudio {
 
   /** Renders every line and waits for it (used to pre-voice the library). */
   async renderAll(lines: VoiceLine[]): Promise<{ done: number; failed: number }> {
-    const results = await Promise.all(lines.map((line) => this.render(line, VoiceStudio.id(line, this.renderer.engine))));
+    const results = await Promise.all(lines.map((line) => this.render(line, VoiceStudio.id(line, this.engineOf(line.language)))));
     return { done: results.filter(Boolean).length, failed: results.filter((r) => !r).length };
   }
 
@@ -400,6 +454,7 @@ export class VoiceStudio {
         const { pcm, sampleRate } = await this.renderer.synthesize({
           prompt: prompt(line),
           text: line.text,
+          direction: `${CASTING[line.casting.style].direction}${LANGUAGE_NAMES[line.language] && line.language !== "en" ? `, in ${LANGUAGE_NAMES[line.language]}` : ""}`,
           voice: line.casting.voice,
           language: line.language,
         });

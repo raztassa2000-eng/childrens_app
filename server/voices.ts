@@ -261,7 +261,8 @@ export function createCloudRenderer(options: {
         }
         const message = body.error?.message ?? `Text-to-Speech failed (${res.status})`;
         if (res.status === 401 || res.status === 403 || /API keys? (are|is) not supported|API key not valid/i.test(message)) {
-          authError = `${message} (Use a standard "AIza..." API key from console.cloud.google.com in GOOGLE_TTS_API_KEY.)`;
+          const keyProblem = /API keys? (are|is) not supported|API key not valid/i.test(message);
+          authError = keyProblem ? `${message} (Use a standard "AIza..." API key from console.cloud.google.com in GOOGLE_TTS_API_KEY.)` : message;
           throw new GeminiError(authError, res.status);
         }
         const retryable = res.status === 429 || res.status >= 500;

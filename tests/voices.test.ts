@@ -262,3 +262,24 @@ describe("Gemini voices through Vertex AI", () => {
     expect(urls[1]).toContain("/gemini-2.5-flash-tts:generateContent");
   });
 });
+
+describe("signing in instead of using a key", () => {
+  it("sends a bearer token and quota project instead of an API key", async () => {
+    let headers: Record<string, string> = {};
+    const file = wav(tone(0.1), 24000);
+    const fakeFetch = (async (_url: string, init: RequestInit) => {
+      headers = init.headers as Record<string, string>;
+      return new Response(JSON.stringify({ audioContent: file.toString("base64") }));
+    }) as unknown as typeof fetch;
+    const renderer = createCloudRenderer({
+      auth: async () => ({ Authorization: "Bearer t0k", "x-goog-user-project": "children" }),
+      fetch: fakeFetch,
+      requestsPerMinute: 6000,
+      model: "gemini-2.5-flash-tts",
+    });
+    await renderer.synthesize({ prompt: "", text: "שלום", direction: "", voice: "Leda", language: "he" });
+    expect(headers.Authorization).toBe("Bearer t0k");
+    expect(headers["x-goog-user-project"]).toBe("children");
+    expect(headers["x-goog-api-key"]).toBeUndefined();
+  });
+});

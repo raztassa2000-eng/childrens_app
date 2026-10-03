@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -224,8 +225,35 @@ const CLOUD_LOCALES: Record<string, string> = { he: "he-IL", en: "en-US", fr: "f
  * as Gemini TTS, with far higher limits (200 requests a minute, no small daily
  * cap). It doesn't take acting directions, so styles come from the voice choice.
  */
+/**
+ * Signs requests in as the person running the app, via the gcloud CLI
+ * (`gcloud auth login`). Project owners can use every Google Cloud voice this
+ * way, with no API-key restrictions in the way. Tokens last an hour; we renew
+ * them every 45 minutes.
+ */
+export function gcloudAuth(project?: string): () => Promise<Record<string, string>> {
+  const run = (args: string[]) =>
+    new Promise<string>((resolve, reject) =>
+      execFile("gcloud", args, { timeout: 30_000 }, (error, stdout, stderr) =>
+        error ? reject(new Error(`gcloud ${args.join(" ")} failed: ${stderr || error.message}`)) : resolve(stdout.trim()),
+      ),
+    );
+  let cached: { token: string; at: number } | null = null;
+  let quotaProject: Promise<string> | null = project ? Promise.resolve(project) : null;
+  return async () => {
+    if (!cached || Date.now() - cached.at > 45 * 60_000) {
+      cached = { token: await run(["auth", "print-access-token"]), at: Date.now() };
+    }
+    quotaProject ??= run(["config", "get-value", "project"]).catch(() => "");
+    const projectId = await quotaProject;
+    return { Authorization: `Bearer ${cached.token}`, ...(projectId ? { "x-goog-user-project": projectId } : {}) };
+  };
+}
+
 export function createCloudRenderer(options: {
-  apiKey: string;
+  apiKey?: string;
+  /** Sign in with a Google account instead of an API key (see gcloudAuth). */
+  auth?: () => Promise<Record<string, string>>;
   fetch?: typeof fetch;
   requestsPerMinute?: number;
   /** A Gemini-TTS model (e.g. "gemini-2.5-flash-tts") instead of Chirp 3 HD: performs acting directions. */
@@ -248,7 +276,10 @@ export function createCloudRenderer(options: {
         if (at > now) await sleep(at - now);
         const res = await doFetch("https://texttospeech.googleapis.com/v1/text:synthesize", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": options.apiKey },
+          headers: {
+            "Content-Type": "application/json",
+            ...(options.auth ? await options.auth() : { "x-goog-api-key": options.apiKey ?? "" }),
+          },
           body: JSON.stringify({
             input: options.model ? { text, prompt: direction } : { text },
             voice: options.model
@@ -292,17 +323,19 @@ export const DEFAULT_CLOUD_GEMINI_MODEL = "gemini-2.5-flash-tts";
  */
 export function rendererFromEnv(env: NodeJS.ProcessEnv): { renderer: VoiceRenderer; label: string } | null {
   const key = env.GEMINI_API_KEY || env.GOOGLE_API_KEY;
-  const cloudKey = env.GOOGLE_TTS_API_KEY || key;
+  // GOOGLE_AUTH=gcloud: use the signed-in Google account instead of API keys.
+  const auth = env.GOOGLE_AUTH === "gcloud" ? gcloudAuth(env.GOOGLE_CLOUD_PROJECT) : undefined;
+  const cloudKey = auth ? "gcloud" : env.GOOGLE_TTS_API_KEY || key;
   const cloudRpm = Number(env.GOOGLE_TTS_RPM ?? 150);
   const made = new Map<string, { renderer: VoiceRenderer; label: string } | null>();
   const build = (kind: string) => {
     if (made.has(kind)) return made.get(kind)!;
     let out: { renderer: VoiceRenderer; label: string } | null = null;
     if (kind === "cloud" && cloudKey) {
-      out = { renderer: createCloudRenderer({ apiKey: cloudKey, requestsPerMinute: cloudRpm }), label: "Google Cloud Chirp 3 HD" };
+      out = { renderer: createCloudRenderer({ apiKey: cloudKey, auth, requestsPerMinute: cloudRpm }), label: "Google Cloud Chirp 3 HD" };
     } else if (kind === "cloud-gemini" && cloudKey) {
       const model = env.GOOGLE_GEMINI_TTS_MODEL || DEFAULT_CLOUD_GEMINI_MODEL;
-      out = { renderer: createCloudRenderer({ apiKey: cloudKey, requestsPerMinute: cloudRpm, model }), label: `Google Cloud ${model}` };
+      out = { renderer: createCloudRenderer({ apiKey: cloudKey, auth, requestsPerMinute: cloudRpm, model }), label: `Google Cloud ${model}` };
     } else if (kind === "vertex" && key) {
       const model = env.VERTEX_TTS_MODEL || DEFAULT_TTS_MODEL;
       out = {
